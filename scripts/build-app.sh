@@ -37,11 +37,11 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleShortVersionString</key><string>0.1.0</string>
   <key>CFBundleVersion</key><string>1</string>
-  <key>LSMinimumSystemVersion</key><string>14.0</string>
+  <key>LSMinimumSystemVersion</key><string>15.0</string>
   <key>NSHighResolutionCapable</key><true/>
   <key>CFBundleDevelopmentRegion</key><string>de</string>
   <key>NSAppleEventsUsageDescription</key><string>Stechuhr liest URL und Titel des aktiven Browser-Tabs, um Zeit nach Domain und Seite zuordnen zu können. Die Daten bleiben auf diesem Mac.</string>
-  <key>LSUIElement</key><false/>
+  <key>LSUIElement</key><true/>
   <key>NSAppTransportSecurity</key>
   <dict><key>NSAllowsLocalNetworking</key><true/></dict>
 </dict>

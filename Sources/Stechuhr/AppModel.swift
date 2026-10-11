@@ -68,6 +68,15 @@ final class AppModel: ObservableObject {
 
     var activeProjects: [Project] { projects.filter { !$0.archived } }
 
+    /// The report for today, independent of the day shown in the window (for the menu bar).
+    var todayReport: DayReport? { isToday ? report : nil }
+
+    var workingClaudeSessions: [EffectiveClaudeSpan] {
+        guard isToday, let r = report else { return [] }
+        var seen = Set<String>()
+        return r.claudeSpans.filter { $0.isOpen && seen.insert($0.sessionId).inserted }
+    }
+
     // MARK: - Loading
 
     private func tick() {
