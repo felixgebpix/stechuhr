@@ -1,0 +1,278 @@
+import Foundation
+import SwiftUI
+import StechuhrCore
+
+@MainActor
+final class AppModel: ObservableObject {
+    static weak var shared: AppModel?
+    let db: Database
+
+    @Published var settings: AppSettings
+    @Published var projects: [Project] = []
+    @Published var rules: [Rule] = []
+    @Published var folders: [FolderMapping] = []
+    @Published var day: Date = Calendar.current.startOfDay(for: Date())
+    @Published private(set) var report: DayReport?
+    /// Without Accessibility permission only app names are recorded, no window titles.
+    @Published private(set) var accessibilityGranted = Permissions.accessibilityGranted
+    @Published var hookServerError: String?
+    @Published private(set) var lastHookEvent: Date?
+    /// Selected foreground snippets (shared by timeline and activity list).
+    @Published var selection: Set<String> = []
+    @Published var colorByProject = true
+
+    private var recorder: ActivityRecorder?
+    private var hookServer: HookServer?
+    private var timer: Timer?
+
+    init() {
+        do {
+            db = try Database()
+        } catch {
+            fatalError("Stechuhr: \(error)")
+        }
+        settings = db.loadSettings()
+        reloadConfig()
+        AppModel.shared = self
+        installHookHelper()
+        HookInbox.drain(into: db)
+        startHookServer()
+        lastHookEvent = (try? db.lastClaudeEvent())?.ts
+        startRecorder()
+        timer = Timer.scheduledTimer(withTimeInterval: 15, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.tick() }
+        }
+        recompute()
+    }
+
+    var dayKey: String {
+        let f = DateFormatter()
+        f.dateFormat = "yyyy-MM-dd"
+        return f.string(from: day)
+    }
+
+    var daySpan: TimeSpan {
+        TimeSpan(day, Calendar.current.date(byAdding: .day, value: 1, to: day)!)
+    }
+
+    var isToday: Bool { Calendar.current.isDateInToday(day) }
+
+    func project(_ id: Int64?) -> Project? {
+        guard let id else { return nil }
+        return projects.first { $0.id == id }
+    }
+
+    var activeProjects: [Project] { projects.filter { !$0.archived } }
+
+    // MARK: - Loading
+
+    private func tick() {
+        HookInbox.drain(into: db)
+        accessibilityGranted = Permissions.accessibilityGranted
+        if isToday { recompute() }
+    }
+
+    private func startRecorder() {
+        do {
+            let r = try ActivityRecorder()
+            r.idleThreshold = settings.idleThreshold
+            r.start()
+            recorder = r
+        } catch {
+            NSLog("Stechuhr: Aufzeichnung konnte nicht starten: \(error)")
+        }
+        if !accessibilityGranted { Permissions.requestAccessibility() }
+    }
+
+    /// Closes the currently open foreground record, e.g. before quitting.
+    func flushRecorder() { recorder?.flush() }
+
+    func reloadConfig() {
+        projects = (try? db.projects()) ?? []
+        rules = (try? db.rules()) ?? []
+        folders = (try? db.folderMappings()) ?? []
+    }
+
+    func setDay(_ d: Date) {
+        day = Calendar.current.startOfDay(for: d)
+        selection = []
+        recompute()
+    }
+
+    func recompute() {
+        let recorded = (try? db.recorded(overlapping: daySpan)) ?? []
+        let segments = Segmenter.segments(from: recorded, day: daySpan, noiseThreshold: settings.noiseThreshold)
+        report = DayReport.build(
+            day: daySpan, segments: segments,
+            assignments: (try? db.assignments(day: dayKey)) ?? [:],
+            rules: rules, projects: projects,
+            manualTasks: (try? db.backgroundTasks(overlapping: daySpan)) ?? [],
+            claudeEvents: (try? db.claudeEvents(around: daySpan)) ?? [],
+            folders: folders, settings: settings, now: Date())
+        let valid = Set(report?.segments.map(\.id) ?? [])
+        selection = selection.filter(valid.contains)
+    }
+
+    // MARK: - Hooks
+
+    private func startHookServer() {
+        let server = HookServer { [weak self] event in
+            Task { @MainActor in self?.receive(event) }
+        }
+        do {
+            try server.start()
+            hookServer = server
+        } catch {
+            hookServerError = "Empfang für Claude-Code-Ereignisse konnte nicht starten (Port \(StechuhrPaths.hookPort)): \(error.localizedDescription)"
+        }
+    }
+
+    private func receive(_ event: ClaudeEvent) {
+        try? db.insert(event)
+        lastHookEvent = event.ts
+        if isToday { recompute() }
+    }
+
+    /// Copies the bundled `stechuhr-hook` helper to a stable location that the Claude Code hooks point to.
+    private func installHookHelper() {
+        let candidates = [
+            Bundle.main.url(forResource: "stechuhr-hook", withExtension: nil),
+            Bundle.main.executableURL?.deletingLastPathComponent().appendingPathComponent("stechuhr-hook"),
+        ].compactMap { $0 }
+        let fm = FileManager.default
+        guard let source = candidates.first(where: { fm.isExecutableFile(atPath: $0.path) }) else { return }
+        let target = StechuhrPaths.hookBinary
+        if let a = try? Data(contentsOf: source), let b = try? Data(contentsOf: target), a == b { return }
+        try? fm.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let tmp = target.appendingPathExtension("new")
+        try? fm.removeItem(at: tmp)
+        guard (try? fm.copyItem(at: source, to: tmp)) != nil else { return }
+        _ = try? fm.replaceItemAt(target, withItemAt: tmp)
+        if !fm.fileExists(atPath: target.path) { try? fm.moveItem(at: tmp, to: target) }
+    }
+
+    var hookHelperInstalled: Bool { FileManager.default.isExecutableFile(atPath: StechuhrPaths.hookBinary.path) }
+    var hookServerRunning: Bool { hookServer != nil }
+
+    // MARK: - Assignments
+
+    func assign(_ keys: Set<String>, to projectId: Int64?) {
+        guard !keys.isEmpty else { return }
+        try? db.assign(Array(keys), day: dayKey, projectId: projectId)
+        recompute()
+    }
+
+    func addRule(_ conditions: [RuleCondition], projectId: Int64) {
+        _ = try? db.save(Rule(projectId: projectId, conditions: conditions))
+        rules = (try? db.rules()) ?? []
+        recompute()
+    }
+
+    func save(_ rule: Rule) {
+        _ = try? db.save(rule)
+        rules = (try? db.rules()) ?? []
+        recompute()
+    }
+
+    func deleteRule(_ id: Int64) {
+        try? db.deleteRule(id)
+        rules = (try? db.rules()) ?? []
+        recompute()
+    }
+
+    // MARK: - Projects
+
+    @discardableResult
+    func save(_ project: Project) -> Int64 {
+        let id = (try? db.save(project)) ?? 0
+        reloadConfig()
+        recompute()
+        return id
+    }
+
+    func deleteProject(_ id: Int64) {
+        try? db.deleteProject(id)
+        reloadConfig()
+        recompute()
+    }
+
+    @discardableResult
+    func newProject(named name: String) -> Int64 {
+        let palette = ["#E5484D", "#F76B15", "#FFC53D", "#46A758", "#12A594", "#0090FF", "#3E63DD", "#8E4EC6", "#D6409F", "#978365"]
+        return save(Project(name: name, colorHex: palette[projects.count % palette.count]))
+    }
+
+    // MARK: - Background tasks
+
+    func save(_ task: BackgroundEntry) {
+        _ = try? db.save(task)
+        recompute()
+    }
+
+    func deleteBackgroundTask(_ id: Int64) {
+        try? db.deleteBackgroundTask(id)
+        recompute()
+    }
+
+    // MARK: - Folders
+
+    func map(folder: String, to projectId: Int64) {
+        try? db.save(FolderMapping(path: folder, projectId: projectId))
+        folders = (try? db.folderMappings()) ?? []
+        recompute()
+    }
+
+    func deleteFolderMapping(_ id: Int64) {
+        try? db.deleteFolderMapping(id)
+        folders = (try? db.folderMappings()) ?? []
+        recompute()
+    }
+
+    func recentClaudeFolders() -> [Database.FolderUsage] {
+        (try? db.claudeFolders(since: Date().addingTimeInterval(-60 * 24 * 3600))) ?? []
+    }
+
+    // MARK: - Settings
+
+    func save(_ s: AppSettings) {
+        settings = s
+        try? db.save(s)
+        recorder?.idleThreshold = s.idleThreshold
+        recompute()
+    }
+}
+
+// MARK: - Formatting helpers
+
+enum Fmt {
+    static func duration(_ t: TimeInterval) -> String {
+        let m = Int((t / 60).rounded())
+        if m < 60 { return "\(m) min" }
+        return String(format: "%d:%02d h", m / 60, m % 60)
+    }
+
+    static func time(_ d: Date) -> String {
+        d.formatted(date: .omitted, time: .shortened)
+    }
+}
+
+extension Color {
+    init(hex: String) {
+        var s = hex.trimmingCharacters(in: .whitespaces)
+        if s.hasPrefix("#") { s.removeFirst() }
+        let v = UInt64(s, radix: 16) ?? 0x888888
+        self.init(red: Double((v >> 16) & 0xFF) / 255, green: Double((v >> 8) & 0xFF) / 255, blue: Double(v & 0xFF) / 255)
+    }
+
+    var hexString: String {
+        let c = NSColor(self).usingColorSpace(.sRGB) ?? .gray
+        return String(format: "#%02X%02X%02X", Int(c.redComponent * 255), Int(c.greenComponent * 255), Int(c.blueComponent * 255))
+    }
+
+    /// Stable color per app name for "color by app" mode.
+    static func forName(_ name: String) -> Color {
+        var h: UInt64 = 5381
+        for b in name.utf8 { h = (h &* 33) &+ UInt64(b) }
+        return Color(hue: Double(h % 360) / 360, saturation: 0.45, brightness: 0.8)
+    }
+}
