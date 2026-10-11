@@ -31,6 +31,7 @@ public final class Database {
         sqlite3_busy_timeout(db, 2000)
         try exec("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")
         try migrate()
+        try addColumnIfMissing("projects", "keywords", "TEXT NOT NULL DEFAULT '[]'")
     }
 
     deinit { sqlite3_close(db) }
@@ -63,6 +64,14 @@ public final class Database {
             bundle_id TEXT NOT NULL DEFAULT '', title TEXT NOT NULL DEFAULT '', url TEXT, page_title TEXT);
         CREATE INDEX IF NOT EXISTS foreground_events_start ON foreground_events(start);
         """)
+    }
+
+    private func addColumnIfMissing(_ table: String, _ column: String, _ type: String) throws {
+        var exists = false
+        try run("SELECT name FROM pragma_table_info('\(table)')") { s in
+            if self.text(s, 0) == column { exists = true }
+        }
+        if !exists { try exec("ALTER TABLE \(table) ADD COLUMN \(column) \(type)") }
     }
 
     // MARK: - Low level
@@ -120,22 +129,24 @@ public final class Database {
 
     public func projects() throws -> [Project] {
         var out: [Project] = []
-        try run("SELECT id, name, color, bg_billable, cc_billable, archived FROM projects ORDER BY archived, name COLLATE NOCASE") { s in
+        try run("SELECT id, name, color, bg_billable, cc_billable, archived, keywords FROM projects ORDER BY archived, name COLLATE NOCASE") { s in
+            let keywords = (try? JSONDecoder().decode([String].self, from: Data((self.text(s, 6) ?? "[]").utf8))) ?? []
             out.append(Project(id: sqlite3_column_int64(s, 0), name: self.text(s, 1) ?? "", colorHex: self.text(s, 2) ?? "#888888",
                                backgroundBillable: sqlite3_column_int(s, 3) != 0, claudeBillable: sqlite3_column_int(s, 4) != 0,
-                               archived: sqlite3_column_int(s, 5) != 0))
+                               archived: sqlite3_column_int(s, 5) != 0, keywords: keywords))
         }
         return out
     }
 
     @discardableResult
     public func save(_ p: Project) throws -> Int64 {
+        let keywords = String(decoding: (try? JSONEncoder().encode(p.keywords)) ?? Data("[]".utf8), as: UTF8.self)
         let params: [Value] = [.text(p.name), .text(p.colorHex), .int(p.backgroundBillable ? 1 : 0),
-                               .int(p.claudeBillable ? 1 : 0), .int(p.archived ? 1 : 0)]
+                               .int(p.claudeBillable ? 1 : 0), .int(p.archived ? 1 : 0), .text(keywords)]
         if p.id == 0 {
-            return try run("INSERT INTO projects(name, color, bg_billable, cc_billable, archived) VALUES (?,?,?,?,?)", params)
+            return try run("INSERT INTO projects(name, color, bg_billable, cc_billable, archived, keywords) VALUES (?,?,?,?,?,?)", params)
         }
-        try run("UPDATE projects SET name=?, color=?, bg_billable=?, cc_billable=?, archived=? WHERE id=?", params + [.int(p.id)])
+        try run("UPDATE projects SET name=?, color=?, bg_billable=?, cc_billable=?, archived=?, keywords=? WHERE id=?", params + [.int(p.id)])
         return p.id
     }
 
@@ -194,6 +205,37 @@ public final class Database {
                 }
             }
         }
+    }
+
+    /// Manually assigned recorded snippets (with project) since a date – input for rule suggestions.
+    public func manualSamples(since: Date) throws -> [(event: RecordedEvent, projectId: Int64, day: String)] {
+        var out: [(RecordedEvent, Int64, String)] = []
+        try run("""
+            SELECT f.id, f.start, f.end, f.app, f.bundle_id, f.title, f.url, f.page_title, a.project_id, a.day
+            FROM assignments a JOIN foreground_events f ON a.segment_key = 'e' || f.id
+            WHERE f.start >= ? AND a.project_id != 0
+            """, [.double(since.timeIntervalSince1970)]) { s in
+            let e = RecordedEvent(id: sqlite3_column_int64(s, 0),
+                                  span: TimeSpan(Date(timeIntervalSince1970: sqlite3_column_double(s, 1)),
+                                                 Date(timeIntervalSince1970: sqlite3_column_double(s, 2))),
+                                  app: self.text(s, 3) ?? "", bundleId: self.text(s, 4) ?? "", title: self.text(s, 5) ?? "",
+                                  url: self.text(s, 6), pageTitle: self.text(s, 7))
+            out.append((e, sqlite3_column_int64(s, 8), self.text(s, 9) ?? ""))
+        }
+        return out
+    }
+
+    public func dismissedSuggestions() -> Set<String> {
+        var raw = "[]"
+        _ = try? run("SELECT value FROM settings WHERE key='dismissedSuggestions'") { s in raw = self.text(s, 0) ?? "[]" }
+        return Set((try? JSONDecoder().decode([String].self, from: Data(raw.utf8))) ?? [])
+    }
+
+    public func dismissSuggestion(_ id: String) throws {
+        var all = dismissedSuggestions()
+        all.insert(id)
+        let json = String(decoding: try JSONEncoder().encode(all.sorted()), as: UTF8.self)
+        try run("INSERT INTO settings(key, value) VALUES ('dismissedSuggestions', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", [.text(json)])
     }
 
     // MARK: - Background tasks

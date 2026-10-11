@@ -7,6 +7,20 @@ Native macOS-Zeiterfassung für Arbeit mit viel Kontextwechsel. Alles läuft lok
 - **Zuordnung nach Inhalt**: gruppierte Aktivitätsliste (App → Fenstertitel, Browser → Domain → Seitentitel), Gruppen mit einem Klick zuweisen, daraus Regeln machen, Mehrfachauswahl in Liste und Timeline.
 - **Auswertung pro Projekt und Tag**: Vordergrund, Hintergrund (manuell / Claude Code), Überlappung, abrechenbar, Anzahl Arbeitsblöcke, längster Block. Die doppelt gezählte Zeit wird separat ausgewiesen.
 
+## Automatische Zuordnung
+
+Reihenfolge, die erste passende Stufe gewinnt:
+1. **Von Hand** zugewiesen (Liste, Timeline, Mehrfachauswahl)
+2. **Regeln** (z. B. „App ist Figma und Titel enthält DFA“)
+3. **Stichwörter**: Projektname plus eigene Stichwörter pro Projekt, als ganze Wörter gesucht in Fenstertitel,
+   Seitentitel und URL. Passen mehrere Projekte, bleibt der Schnipsel „mehrdeutig“ und unzugeordnet.
+4. sonst **nicht zugeordnet**
+
+Claude-Code-Ordner: feste Ordner-Zuordnung, sonst Projektname/Stichwort im Pfad (z. B. `~/repos/dfa-website` → DFA).
+
+**Lernen:** Weist du ähnliche Schnipsel mehrmals von Hand demselben Projekt zu (≥ 3×, an ≥ 2 Tagen oder ≥ 30 min,
+≥ 90 % eindeutig), schlägt Stechuhr unter „Regeln“ eine passende Regel vor. Sie gilt erst, wenn du sie übernimmst.
+
 ## Bauen und starten
 
 ```bash

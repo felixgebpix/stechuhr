@@ -2,6 +2,10 @@ import Foundation
 
 public enum AssignmentSource: Hashable, Sendable {
     case manual, rule
+    /// Project name or keyword found in title / URL.
+    case keyword(String)
+    /// Keywords of several projects match – left unassigned on purpose.
+    case ambiguous([Int64])
     /// Short switch absorbed into the surrounding project.
     case absorbedNoise
     /// Short switch between different projects – ignored entirely.
@@ -22,7 +26,8 @@ public struct AttributedSegment: Identifiable, Hashable, Sendable {
 public enum Attribution {
     public static let noProject: Int64 = 0
 
-    public static func attribute(_ segments: [Segment], assignments: [String: Int64], rules: [Rule]) -> [AttributedSegment] {
+    public static func attribute(_ segments: [Segment], assignments: [String: Int64], rules: [Rule],
+                                 keywords: KeywordMatcher? = nil) -> [AttributedSegment] {
         let rules = rules.sorted { ($0.priority, $0.id) < ($1.priority, $1.id) }
         var out = segments.map { seg -> AttributedSegment in
             if let p = assignments[seg.key] {
@@ -32,7 +37,11 @@ public enum Attribution {
             if let r = rules.first(where: { $0.matches(seg) }) {
                 return AttributedSegment(segment: seg, projectId: r.projectId, source: .rule)
             }
-            return AttributedSegment(segment: seg, projectId: nil, source: .none)
+            switch keywords?.match(seg) ?? .none {
+            case .match(let pid, let term): return AttributedSegment(segment: seg, projectId: pid, source: .keyword(term))
+            case .ambiguous(let ids): return AttributedSegment(segment: seg, projectId: nil, source: .ambiguous(ids))
+            case .none: return AttributedSegment(segment: seg, projectId: nil, source: .none)
+            }
         }
         // Noise inherits the project only if the snippets before and after belong to the same project.
         let real = out.indices.filter { out[$0].source != .ignoredNoise }
@@ -102,7 +111,8 @@ public struct DayReport: Sendable {
     public static func build(day: TimeSpan, segments: [Segment], assignments: [String: Int64], rules: [Rule],
                              projects: [Project], manualTasks: [BackgroundEntry], claudeEvents: [ClaudeEvent],
                              folders: [FolderMapping], settings: AppSettings, now: Date) -> DayReport {
-        let attributed = Attribution.attribute(segments, assignments: assignments, rules: rules)
+        let keywords = KeywordMatcher(projects: projects)
+        let attributed = Attribution.attribute(segments, assignments: assignments, rules: rules, keywords: keywords)
         let runs = ClaudeSessions.runs(from: claudeEvents, day: day, now: now, staleAfter: settings.claudeStaleAfter)
         let tasks = manualTasks.compactMap { t -> BackgroundEntry? in
             guard let c = t.span.clamped(to: day) else { return nil }
@@ -131,7 +141,7 @@ public struct DayReport: Sendable {
                 interactiveBySession[run.sessionId, default: []] += removed
                 for rest in Spans.subtract([w.span], shown) {
                     claudeSpans.append(EffectiveClaudeSpan(sessionId: run.sessionId, span: rest,
-                                                           projectId: FolderMapping.project(for: w.cwd, in: folders),
+                                                           projectId: FolderResolution.resolve(w.cwd, folders: folders, keywords: keywords).projectId,
                                                            cwd: w.cwd, isOpen: w.isOpen))
                 }
             }

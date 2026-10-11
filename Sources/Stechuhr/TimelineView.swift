@@ -19,7 +19,8 @@ struct DayTimeline: View {
     static let axisHeight: CGFloat = 18
 
     var body: some View {
-        let layout = TimelineLayout(report: report, now: Date(), isToday: model.isToday)
+        let layout = TimelineLayout(report: report, now: Date(), isToday: model.isToday,
+                                    explain: { model.explain($0) }, projectName: { model.project($0)?.name })
         VStack(alignment: .leading, spacing: 4) {
             HStack(alignment: .top, spacing: 0) {
                 VStack(alignment: .leading, spacing: Self.laneGap) {
@@ -169,11 +170,16 @@ struct TimelineLayout {
     private let sessionLane: [String: Int]
     private let now: Date
     private let isToday: Bool
+    private let explain: (AttributedSegment) -> String
+    private let projectName: (Int64?) -> String?
 
-    init(report: DayReport, now: Date, isToday: Bool) {
+    init(report: DayReport, now: Date, isToday: Bool, explain: @escaping (AttributedSegment) -> String,
+         projectName: @escaping (Int64?) -> String?) {
         self.report = report
         self.now = now
         self.isToday = isToday
+        self.explain = explain
+        self.projectName = projectName
         let cal = Calendar.current
         var starts = report.segments.map(\.segment.span.start) + report.manualTasks.map(\.span.start) + report.claudeSpans.map(\.span.start)
         var ends = report.segments.map(\.segment.span.end) + report.manualTasks.map(\.span.end) + report.claudeSpans.map(\.span.end)
@@ -248,7 +254,7 @@ struct TimelineLayout {
         for s in report.segments {
             let seg = s.segment
             let what = seg.isWeb ? "\(seg.app) · \(seg.domain ?? "") · \(seg.displayTitle)" : "\(seg.app) · \(seg.title)"
-            let note = s.source == .ignoredNoise ? " (Rauschen, ignoriert)" : s.source == .absorbedNoise ? " (kurzer Wechsel, eingerechnet)" : ""
+            let note = " → \(projectName(s.projectId) ?? "kein Projekt") (\(explain(s)))"
             out.append(TimelineItem(kind: .segment(seg.key), rect: laneRect(0, seg.span.start, seg.span.end, width),
                                     start: seg.span.start, end: seg.span.end, projectId: s.projectId, app: seg.app,
                                     label: seg.app,

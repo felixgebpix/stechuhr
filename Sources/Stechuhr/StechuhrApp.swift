@@ -41,22 +41,21 @@ enum Page: Hashable {
 
 struct ContentView: View {
     @EnvironmentObject var model: AppModel
-    @State private var page: Page? = .day
 
     var body: some View {
         NavigationSplitView {
-            List(selection: $page) {
+            List(selection: $model.page) {
                 Label("Tag", systemImage: "calendar.day.timeline.left").tag(Page.day)
                 Section("Einrichtung") {
                     Label("Projekte", systemImage: "folder").tag(Page.projects)
-                    Label("Regeln", systemImage: "wand.and.stars").tag(Page.rules)
+                    Label("Regeln", systemImage: "wand.and.stars").badge(model.suggestions.count).tag(Page.rules)
                     Label("Claude-Code-Ordner", systemImage: "sparkles").badge(unmappedCount).tag(Page.folders)
                     Label("Einstellungen", systemImage: "gearshape").tag(Page.settings)
                 }
             }
             .navigationSplitViewColumnWidth(min: 180, ideal: 200)
         } detail: {
-            switch page ?? .day {
+            switch model.page ?? .day {
             case .day: DayView()
             case .projects: ProjectsView()
             case .rules: RulesView()
@@ -66,7 +65,10 @@ struct ContentView: View {
         }
     }
 
-    private var unmappedCount: Int { model.report?.unmappedFolders.count ?? 0 }
+    private var unmappedCount: Int {
+        // Folders that got their project from a keyword are not "unassigned".
+        model.report?.unmappedFolders.count ?? 0
+    }
 }
 
 struct MenuBarContent: View {

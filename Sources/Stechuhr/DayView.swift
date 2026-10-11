@@ -18,6 +18,14 @@ struct DayView: View {
                 }
                 .background(Color.orange.opacity(0.15))
             }
+            if !model.suggestions.isEmpty {
+                HStack {
+                    Banner(text: "Stechuhr hat \(model.suggestions.count) Regel-Vorschlag/-Vorschläge aus deinen Zuweisungen gelernt.",
+                           systemImage: "lightbulb")
+                    Button("Ansehen") { model.page = .rules }.padding(.trailing, 8)
+                }
+                .background(Color.orange.opacity(0.15))
+            }
             if let err = model.hookServerError {
                 Banner(text: err, systemImage: "bolt.horizontal.circle")
             }

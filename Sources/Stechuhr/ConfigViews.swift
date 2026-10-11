@@ -26,6 +26,10 @@ struct ProjectsView: View {
                 TableColumn("Name") { p in
                     TextField("", text: Binding(get: { p.name }, set: { var q = p; q.name = $0; model.save(q) }))
                 }
+                TableColumn("Stichwörter") { p in
+                    KeywordsField(project: p)
+                }
+                .width(min: 160, ideal: 240)
                 TableColumn("Hintergrund abrechenbar") { p in
                     Toggle("", isOn: Binding(get: { p.backgroundBillable }, set: { var q = p; q.backgroundBillable = $0; model.save(q) }))
                         .labelsHidden()
@@ -64,6 +68,31 @@ struct ProjectsView: View {
     }
 }
 
+/// Comma-separated keywords; saved on Enter or when the field loses focus.
+struct KeywordsField: View {
+    @EnvironmentObject var model: AppModel
+    let project: Project
+    @State private var text = ""
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        TextField("", text: $text, prompt: Text("z. B. Kürzel, Kunde, Repo"))
+            .focused($focused)
+            .onAppear { text = project.keywords.joined(separator: ", ") }
+            .onSubmit(save)
+            .onChange(of: focused) { _, f in if !f { save() } }
+            .help("Der Projektname zählt automatisch. Weitere Wörter mit Komma trennen. Sie werden als ganze Wörter in Fenstertiteln, URLs und Claude-Code-Ordnern gesucht.")
+    }
+
+    private func save() {
+        let words = text.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+        guard words != project.keywords else { return }
+        var p = project
+        p.keywords = words
+        model.save(p)
+    }
+}
+
 struct RulesView: View {
     @EnvironmentObject var model: AppModel
     @State private var editing: Rule?
@@ -80,6 +109,26 @@ struct RulesView: View {
                 .disabled(model.activeProjects.isEmpty)
             }
             .padding(10)
+            if !model.suggestions.isEmpty {
+                VStack(alignment: .leading, spacing: 6) {
+                    Label("Vorschläge aus deinen Zuweisungen", systemImage: "lightbulb").font(.headline)
+                    ForEach(model.suggestions) { s in
+                        HStack {
+                            Circle().fill(model.project(s.projectId).map { Color(hex: $0.colorHex) } ?? .gray).frame(width: 9, height: 9)
+                            Text(model.project(s.projectId)?.name ?? "–").fontWeight(.medium)
+                            Text("wenn " + s.conditions.map(\.summary).joined(separator: " und ")).lineLimit(1).truncationMode(.middle)
+                            Spacer()
+                            Text("\(s.count)× von Hand, \(Fmt.duration(s.duration)) an \(s.days) Tag(en)")
+                                .font(.caption).foregroundStyle(.secondary)
+                            Button("Übernehmen") { model.accept(s) }
+                            Button("Ablehnen") { model.dismiss(s) }
+                        }
+                    }
+                }
+                .padding(10)
+                .background(Color.yellow.opacity(0.12), in: RoundedRectangle(cornerRadius: 8))
+                .padding(.horizontal, 10).padding(.bottom, 10)
+            }
             Table(model.rules) {
                 TableColumn("Projekt") { r in Text(model.project(r.projectId)?.name ?? "–") }
                     .width(min: 120, ideal: 160)
@@ -152,7 +201,12 @@ struct ClaudeFoldersView: View {
     @State private var usage: [Database.FolderUsage] = []
 
     var body: some View {
-        let unmapped = usage.filter { FolderMapping.project(for: $0.cwd, in: model.folders) == nil }
+        let resolved = usage.map { ($0, model.resolve(folder: $0.cwd)) }
+        let unmapped = resolved.filter { $0.1.projectId == nil }.map(\.0)
+        let byKeyword = resolved.compactMap { u, r -> (Database.FolderUsage, Int64, String)? in
+            if case .keyword(let id, let term) = r { return (u, id, term) }
+            return nil
+        }
         Form {
             Section("Erfassung") {
                 LabeledContent("Empfang") {
@@ -199,6 +253,21 @@ struct ClaudeFoldersView: View {
                 }
             } header: {
                 Text("Nicht zugeordnet")
+            } footer: {
+                Text("Ordner, deren Pfad den Namen oder ein Stichwort genau eines Projekts enthält, werden automatisch zugeordnet. Passen mehrere Projekte, landet der Ordner hier.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            if !byKeyword.isEmpty {
+                Section("Automatisch erkannt (per Stichwort)") {
+                    ForEach(byKeyword, id: \.0.cwd) { f, pid, term in
+                        HStack {
+                            Text(f.cwd).font(.body.monospaced()).lineLimit(1).truncationMode(.head)
+                            Spacer()
+                            Text("→ \(model.project(pid)?.name ?? "–") (Stichwort „\(term)“)").foregroundStyle(.secondary)
+                            Button("Fest zuordnen") { model.map(folder: f.cwd, to: pid) }
+                        }
+                    }
+                }
             }
             Section {
                 ForEach(model.folders) { m in

@@ -190,3 +190,69 @@ final class MiscTests: XCTestCase {
         XCTAssertEqual(rec.first?.span, span(0, 10))
     }
 }
+
+final class KeywordTests: XCTestCase {
+    let dfa = Project(id: 1, name: "DFA", colorHex: "#f00", keywords: ["Deutsche Fachagentur", "dfa-website"])
+    let kx = Project(id: 2, name: "Kunde X", colorHex: "#0f0", keywords: ["kundex"])
+
+    func testWholeWordsOnly() {
+        let m = KeywordMatcher(projects: [dfa, kx])
+        XCTAssertEqual(m.match(["Figma – DFA Startseite"]), .match(projectId: 1, term: "DFA"))
+        XCTAssertEqual(m.match(["https://github.com/firma/dfa-website/pull/3"]), .match(projectId: 1, term: "DFA"))
+        XCTAssertEqual(m.match(["Schadfall Übersicht", "DFAX"]), .none)
+        XCTAssertEqual(m.match(["Mail – deutsche fachagentur Angebot"]), .match(projectId: 1, term: "Deutsche Fachagentur"))
+    }
+
+    func testAmbiguousIsNotAssigned() {
+        let m = KeywordMatcher(projects: [dfa, kx])
+        XCTAssertEqual(m.match(["DFA × Kunde X Abstimmung"]), .ambiguous([1, 2]))
+        let out = Attribution.attribute([seg("a", 0, 10, app: "Mail", title: "DFA × Kunde X")], assignments: [:], rules: [], keywords: m)
+        XCTAssertNil(out[0].projectId)
+        XCTAssertEqual(out[0].source, .ambiguous([1, 2]))
+    }
+
+    func testRulesBeatKeywords() {
+        let m = KeywordMatcher(projects: [dfa, kx])
+        let rules = [Rule(id: 1, projectId: 2, conditions: [RuleCondition(.app, .equals, "Figma")])]
+        let out = Attribution.attribute([seg("a", 0, 10, title: "DFA")], assignments: [:], rules: rules, keywords: m)
+        XCTAssertEqual(out[0].projectId, 2)
+    }
+
+    func testFolderByKeyword() {
+        let m = KeywordMatcher(projects: [dfa, kx])
+        let home = NSHomeDirectory()
+        XCTAssertEqual(FolderResolution.resolve(home + "/repos/dfa-website/app", folders: [], keywords: m), .keyword(1, term: "DFA"))
+        XCTAssertEqual(FolderResolution.resolve(home + "/repos/dfa-website", folders: [FolderMapping(path: home + "/repos", projectId: 2)], keywords: m), .mapping(2))
+        XCTAssertEqual(FolderResolution.resolve(home + "/repos/timetracker", folders: [], keywords: m), .none)
+    }
+}
+
+final class SuggestionTests: XCTestCase {
+    func sample(_ key: String, _ app: String, _ title: String, project: Int64, day: String, minutes: Double = 10) -> RuleSuggester.Sample {
+        RuleSuggester.Sample(segment: seg(key, 0, minutes, app: app, title: title), projectId: project, day: day)
+    }
+
+    func testSuggestsConsistentManualAssignments() {
+        let samples = [
+            sample("1", "Slack", "#kunde-x", project: 2, day: "d1"),
+            sample("2", "Slack", "#kunde-x", project: 2, day: "d2"),
+            sample("3", "Slack", "#kunde-x", project: 2, day: "d2"),
+            sample("4", "Slack", "#dfa", project: 1, day: "d1"),
+        ]
+        let s = RuleSuggester.suggest(from: samples, rules: [], dismissed: [])
+        // "Slack" alone is not consistent (3:1 < 90 %), but Slack + "#kunde-x" is.
+        XCTAssertEqual(s.count, 1)
+        XCTAssertEqual(s[0].projectId, 2)
+        XCTAssertEqual(s[0].conditions, [RuleCondition(.app, .equals, "Slack"), RuleCondition(.title, .equals, "#kunde-x")])
+
+        XCTAssertTrue(RuleSuggester.suggest(from: samples, rules: [], dismissed: [s[0].id]).isEmpty)
+        let covered = [Rule(id: 1, projectId: 2, conditions: s[0].conditions)]
+        XCTAssertTrue(RuleSuggester.suggest(from: samples, rules: covered, dismissed: []).isEmpty)
+    }
+
+    func testPrefersGeneralPattern() {
+        let samples = (1...4).map { sample("\($0)", "Figma", "Screen \($0)", project: 1, day: "d\($0)") }
+        let s = RuleSuggester.suggest(from: samples, rules: [], dismissed: [])
+        XCTAssertEqual(s.map(\.conditions), [[RuleCondition(.app, .equals, "Figma")]])
+    }
+}
