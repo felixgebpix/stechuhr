@@ -86,6 +86,7 @@ final class AppModel: ObservableObject {
         HookInbox.drain(into: db)
         accessibilityGranted = Permissions.accessibilityGranted
         if isToday { recompute() }
+        checkContext()
     }
 
     private func startRecorder() {
@@ -116,18 +117,118 @@ final class AppModel: ObservableObject {
     }
 
     func recompute() {
-        let recorded = (try? db.recorded(overlapping: daySpan)) ?? []
-        let segments = Segmenter.segments(from: recorded, day: daySpan, noiseThreshold: settings.noiseThreshold)
-        report = DayReport.build(
-            day: daySpan, segments: segments,
-            assignments: (try? db.assignments(day: dayKey)) ?? [:],
-            rules: rules, projects: projects,
-            manualTasks: (try? db.backgroundTasks(overlapping: daySpan)) ?? [],
-            claudeEvents: (try? db.claudeEvents(around: daySpan)) ?? [],
-            folders: folders, settings: settings, now: Date(),
-            entries: (try? db.timeEntries(overlapping: daySpan)) ?? [])
+        report = buildReport(for: day)
         let valid = Set(report?.segments.map(\.id) ?? [])
         selection = selection.filter(valid.contains)
+    }
+
+    private static func key(for day: Date) -> String {
+        let f = DateFormatter()
+        f.dateFormat = "yyyy-MM-dd"
+        return f.string(from: day)
+    }
+
+    private func buildReport(for day: Date) -> DayReport {
+        let start = Calendar.current.startOfDay(for: day)
+        let span = TimeSpan(start, Calendar.current.date(byAdding: .day, value: 1, to: start)!)
+        let recorded = (try? db.recorded(overlapping: span)) ?? []
+        let segments = Segmenter.segments(from: recorded, day: span, noiseThreshold: settings.noiseThreshold)
+        return DayReport.build(
+            day: span, segments: segments,
+            assignments: (try? db.assignments(day: Self.key(for: start))) ?? [:],
+            rules: rules, projects: projects,
+            manualTasks: (try? db.backgroundTasks(overlapping: span)) ?? [],
+            claudeEvents: (try? db.claudeEvents(around: span)) ?? [],
+            folders: folders, settings: settings, now: Date(),
+            entries: (try? db.timeEntries(overlapping: span)) ?? [])
+    }
+
+    // MARK: - "Woran arbeitest du gerade?"
+
+    /// The question currently shown in the prompt panel.
+    @Published var prompt: ContextPrompt?
+    private var lastPromptAt: Date = .distantPast
+    /// After "Privat/Pause" no new question until a clear project shows up again.
+    private var quietSince: Date?
+    private var answeredAway: Set<TimeSpan> = []
+    /// Entry created from an answer; it grows while you keep working without a different clear project.
+    private var runningEntryId: Int64?
+
+    private func checkContext() {
+        guard !activeProjects.isEmpty else { return }
+        let today = isToday ? (report ?? buildReport(for: Date())) : buildReport(for: Date())
+        let now = Date()
+        extendRunningEntry(today, now: now)
+        guard prompt == nil, now.timeIntervalSince(lastPromptAt) >= settings.promptCooldown || lastPromptAt == .distantPast else { return }
+
+        if settings.askAfterAway {
+            let events = (try? db.recorded(overlapping: TimeSpan(now.addingTimeInterval(-12 * 3600), now))) ?? []
+            let covered = today.entries.map(\.span) + today.manualTasks.map(\.span)
+            if let gap = ContextPrompter.away(events: events, covered: covered, now: now, threshold: settings.awayThreshold),
+               !answeredAway.contains(gap) {
+                answeredAway.insert(gap)
+                show(.away(span: gap, candidates: ContextPrompter.candidates(segments: today.segments, entries: today.entries, before: gap.start)))
+                return
+            }
+        }
+        if settings.askWhenUnclear, let since = ContextPrompter.unclear(segments: today.segments, now: now, minDuration: settings.unclearAfter) {
+            if let q = quietSince, since <= q.addingTimeInterval(settings.unclearAfter) { return }
+            quietSince = nil
+            show(.unclear(since: since, candidates: ContextPrompter.candidates(segments: today.segments, entries: today.entries, before: now)))
+        }
+    }
+
+    private func show(_ p: ContextPrompt) {
+        lastPromptAt = Date()
+        prompt = p
+        PromptPanel.shared.show(model: self)
+    }
+
+    /// Answer with a project: creates a time entry (for "unclear" it keeps growing while you continue).
+    func answer(project id: Int64, note: String = "") {
+        guard let p = prompt else { return }
+        switch p {
+        case .unclear(let since, _):
+            let entry = TimeEntry(projectId: id, span: TimeSpan(since, Date()), title: note)
+            runningEntryId = try? db.save(entry)
+        case .away(let span, _):
+            _ = try? db.save(TimeEntry(projectId: id, span: span, title: note.isEmpty ? "Abwesend" : note))
+        }
+        closePrompt()
+        recompute()
+        refreshSuggestions()
+    }
+
+    /// "Privat / Pause": nothing is recorded, and Stechuhr stays quiet until a clear project shows up.
+    func answerPrivate() {
+        if case .unclear = prompt { quietSince = Date() }
+        closePrompt()
+    }
+
+    /// "Später" (or the panel timed out): ask again after the cooldown.
+    func answerLater() { closePrompt() }
+
+    private func closePrompt() {
+        prompt = nil
+        PromptPanel.shared.hide()
+    }
+
+    private func extendRunningEntry(_ today: DayReport, now: Date) {
+        guard let id = runningEntryId, var entry = today.entries.first(where: { $0.id == id }) else { return }
+        let after = today.segments.filter { $0.counts && $0.segment.span.end > entry.span.end }
+        // Stops as soon as something clearly belongs to another project, or after a long break.
+        let foreign = after.first { $0.source.isOwnSignal && $0.projectId != entry.projectId }
+        let limit = foreign?.segment.span.start ?? now
+        var end = entry.span.end
+        for s in after.sorted(by: { $0.segment.span.start < $1.segment.span.start }) where s.segment.span.start < limit {
+            if s.segment.span.start.timeIntervalSince(end) > settings.awayThreshold { break }
+            end = max(end, min(s.segment.span.end, limit))
+        }
+        if end > entry.span.end {
+            entry.span.end = end
+            _ = try? db.save(entry)
+        }
+        if foreign != nil { runningEntryId = nil }
     }
 
     // MARK: - Hooks

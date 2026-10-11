@@ -397,6 +397,17 @@ struct GeneralSettingsView: View {
             Section("Start") {
                 LaunchAtLoginToggle()
             }
+            Section("Nachfragen") {
+                Toggle("Fragen, wenn das Projekt unklar ist", isOn: $s.askWhenUnclear)
+                Stepper("… nach \(Int(s.unclearAfter / 60)) min ohne erkennbares Projekt", value: $s.unclearAfter, in: 60...1800, step: 60)
+                    .disabled(!s.askWhenUnclear)
+                Toggle("Nach Abwesenheit fragen, was du gemacht hast", isOn: $s.askAfterAway)
+                Stepper("… ab \(Int(s.awayThreshold / 60)) min Abwesenheit", value: $s.awayThreshold, in: 300...7200, step: 300)
+                    .disabled(!s.askAfterAway)
+                Stepper("Höchstens alle \(Int(s.promptCooldown / 60)) min fragen", value: $s.promptCooldown, in: 60...3600, step: 60)
+                Text("Erkennt Stechuhr das Projekt selbst (Regel, Ordner, Stichwort, Claude-Session), wird nicht gefragt. Die Antwort wird als Zeiteintrag gespeichert.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
             Section("Fragmentiertes Arbeiten") {
                 Stepper("Rauschen: Wechsel unter \(Int(s.noiseThreshold)) s ignorieren", value: $s.noiseThreshold, in: 0...60, step: 1)
                 Text("Kürzere Wechsel werden dem umgebenden Projekt zugerechnet, wenn davor und danach dasselbe Projekt lief, sonst ignoriert. Alles darüber behält seine eigene Zuordnung.")

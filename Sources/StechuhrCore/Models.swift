@@ -185,6 +185,14 @@ public struct AppSettings: Sendable, Equatable {
     public var suggestionGap: TimeInterval = 300
     /// Block suggestions shorter than this are not proposed.
     public var minSuggestion: TimeInterval = 300
+    /// Ask "Woran arbeitest du gerade?" when the project is unclear for a while.
+    public var askWhenUnclear = true
+    public var unclearAfter: TimeInterval = 180
+    /// Ask what happened while you were away.
+    public var askAfterAway = true
+    public var awayThreshold: TimeInterval = 900
+    /// Minimum time between two questions.
+    public var promptCooldown: TimeInterval = 600
     /// Folders scanned for project suggestions (e.g. ~/repos).
     public var projectRoots: [String] = ["~/repos"]
 
