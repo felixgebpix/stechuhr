@@ -6,6 +6,7 @@ struct DayView: View {
     @State private var tab = 0
     @State private var editingTask: BackgroundEntry?
     @State private var newProjectRequest: NewProjectRequest?
+    @State private var editingEntry: TimeEntry?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -30,7 +31,11 @@ struct DayView: View {
                 Banner(text: err, systemImage: "bolt.horizontal.circle")
             }
             if let report = model.report {
-                DayTimeline(report: report, onEditTask: { editingTask = $0 })
+                DayTimeline(report: report, onEditTask: { editingTask = $0 }, onEditEntry: { editingEntry = $0 },
+                            onSuggestion: { s in
+                                editingEntry = TimeEntry(projectId: s.projectId ?? model.activeProjects.first?.id ?? 0,
+                                                         span: s.span, title: s.title)
+                            })
                     .padding(.vertical, 8)
                 Divider()
                 selectionBar(report)
@@ -59,6 +64,9 @@ struct DayView: View {
         .sheet(item: $newProjectRequest) { req in
             NewProjectSheet(request: req)
         }
+        .sheet(item: $editingEntry) { entry in
+            TimeEntrySheet(entry: entry)
+        }
     }
 
     private var header: some View {
@@ -71,6 +79,14 @@ struct DayView: View {
             Button("Heute") { model.setDay(Date()) }.disabled(model.isToday)
             Text(model.day.formatted(.dateTime.weekday(.wide).day().month(.wide))).font(.headline).padding(.leading, 8)
             Spacer()
+            if let n = model.report?.suggestions.filter({ $0.projectId != nil }).count, n > 0 {
+                Button {
+                    model.acceptAllBlocks()
+                } label: {
+                    Label("\(n) Vorschläge übernehmen", systemImage: "checkmark.seal")
+                }
+                .help("Alle gestrichelten Blöcke mit erkanntem Projekt als Zeiteinträge bestätigen")
+            }
             Toggle("Nach Projekt einfärben", isOn: $model.colorByProject).toggleStyle(.switch).controlSize(.small)
             Button {
                 let start = model.isToday ? Date().addingTimeInterval(-3600) : model.day.addingTimeInterval(10 * 3600)
@@ -104,6 +120,7 @@ struct DayView: View {
                     Button("Manuelle Zuordnung entfernen") { model.assign(model.selection, to: nil) }
                 }
                 .fixedSize()
+                Button("Als Zeiteintrag …") { editingEntry = model.entryFromSelection() }
                 Button("Auswahl aufheben") { model.selection = [] }
             }
             .padding(.horizontal, 10).padding(.vertical, 6)
@@ -161,6 +178,46 @@ struct NewProjectSheet: View {
             }
         }
         .padding(20)
+    }
+}
+
+struct TimeEntrySheet: View {
+    @EnvironmentObject var model: AppModel
+    @Environment(\.dismiss) var dismiss
+    @State var entry: TimeEntry
+
+    init(entry: TimeEntry) { _entry = State(initialValue: entry) }
+
+    var body: some View {
+        Form {
+            Text(entry.id == 0 ? "Zeiteintrag anlegen" : "Zeiteintrag bearbeiten").font(.headline)
+            Picker("Projekt", selection: $entry.projectId) {
+                ForEach(model.activeProjects) { p in Text(p.name).tag(p.id) }
+            }
+            DatePicker("Von", selection: $entry.span.start)
+            DatePicker("Bis", selection: Binding(get: { entry.span.end }, set: { entry.span.end = max($0, entry.span.start) }))
+            TextField("Titel", text: $entry.title, prompt: Text("optional"))
+            Text("Dauer: \(Fmt.duration(entry.span.duration)). Kurze Wechsel zu Werkzeugen zählen mit. Schnipsel, die eindeutig zu einem anderen Projekt gehören, werden herausgerechnet.")
+                .font(.caption).foregroundStyle(.secondary)
+            HStack {
+                if entry.id != 0 {
+                    Button("Löschen", role: .destructive) {
+                        model.deleteTimeEntry(entry.id)
+                        dismiss()
+                    }
+                }
+                Spacer()
+                Button("Abbrechen") { dismiss() }.keyboardShortcut(.cancelAction)
+                Button(entry.id == 0 ? "Übernehmen" : "Speichern") {
+                    model.save(entry)
+                    dismiss()
+                }
+                .keyboardShortcut(.defaultAction)
+                .disabled(entry.projectId == 0 || entry.span.duration <= 0)
+            }
+        }
+        .padding(20)
+        .frame(width: 420)
     }
 }
 
@@ -222,6 +279,9 @@ struct DayStatsView: View {
                 }
                 .width(min: 140, ideal: 180)
                 TableColumn("Ich (Vordergrund)") { s in dur(s.foreground) }
+                TableColumn("davon bestätigt") { s in
+                    dur(s.confirmed).help("Durch Zeiteinträge bestätigter Teil der Vordergrundzeit")
+                }
                 TableColumn("Hintergrund manuell") { s in dur(s.manualBackground) }
                 TableColumn("Claude Code") { s in
                     HStack(spacing: 4) {

@@ -1,15 +1,17 @@
 import SwiftUI
 import StechuhrCore
 
-/// Activities grouped by content: App → window title, browser → domain → page title.
+/// Activities grouped by content: [project →] app → window title, browser → domain → page, document app → folder → file.
 struct ActivityNode: Identifiable, Hashable {
-    enum Level: Hashable { case app, title, domain, page }
+    enum Level: Hashable { case project, app, title, domain, page, folder, file }
 
     var id: String
     var level: Level
     var title: String
     var app: String
     var domain: String?
+    /// Folder or file path for .folder / .file
+    var path: String?
     var duration: TimeInterval = 0
     var keys: [String] = []
     var projectIds: Set<Int64?> = []
@@ -19,10 +21,13 @@ struct ActivityNode: Identifiable, Hashable {
 
     var icon: String {
         switch level {
+        case .project: "folder.fill"
         case .app: "app.dashed"
         case .title: "macwindow"
         case .domain: "globe"
         case .page: "doc.richtext"
+        case .folder: "folder"
+        case .file: "doc"
         }
     }
 
@@ -30,6 +35,8 @@ struct ActivityNode: Identifiable, Hashable {
     func ruleConditions(search: String) -> [RuleCondition] {
         let s = search.trimmingCharacters(in: .whitespaces)
         switch level {
+        case .project:
+            return []
         case .app:
             var c = [RuleCondition(.app, .equals, app)]
             if !s.isEmpty, !app.localizedCaseInsensitiveContains(s) { c.append(RuleCondition(.title, .contains, s)) }
@@ -42,60 +49,75 @@ struct ActivityNode: Identifiable, Hashable {
             return c
         case .page:
             return [RuleCondition(.domain, .equals, domain ?? ""), RuleCondition(.title, .equals, title)]
+        case .folder:
+            return [RuleCondition(.path, .prefix, Self.tilde(path ?? ""))]
+        case .file:
+            return [RuleCondition(.path, .equals, path ?? "")]
         }
     }
 
-    static func build(_ segments: [AttributedSegment]) -> [ActivityNode] {
-        var apps: [String: ActivityNode] = [:]
-        var titles: [String: ActivityNode] = [:]
-        var domains: [String: ActivityNode] = [:]
-        var pages: [String: ActivityNode] = [:]
+    static func tilde(_ path: String) -> String {
+        let home = NSHomeDirectory()
+        return path.hasPrefix(home) ? "~" + path.dropFirst(home.count) : path
+    }
 
-        func add(_ node: inout ActivityNode, _ s: AttributedSegment) {
-            node.duration += s.segment.duration
-            node.keys.append(s.id)
-            node.projectIds.insert(s.projectId)
-            if case .ambiguous = s.source { node.ambiguous = true }
-            if case .keyword(let term) = s.source { node.keywords.insert(term) }
+    /// Builds the tree. `projectName` is only used when grouping by project.
+    static func build(_ segments: [AttributedSegment], byProject: Bool, projectName: (Int64?) -> String) -> [ActivityNode] {
+        final class Box {
+            var node: ActivityNode
+            var children: [String: Box] = [:]
+            var order: [String] = []
+            init(_ node: ActivityNode) { self.node = node }
         }
+        let root = Box(ActivityNode(id: "", level: .app, title: "", app: ""))
 
         for s in segments {
             let seg = s.segment
-            let appId = "a\u{1F}\(seg.app)"
-            if apps[appId] == nil { apps[appId] = ActivityNode(id: appId, level: .app, title: seg.app, app: seg.app) }
-            add(&apps[appId]!, s)
+            var path: [(String, ActivityNode)] = []
+            func add(_ comp: String, _ level: Level, _ title: String, domain: String? = nil, path p: String? = nil) {
+                let id = (path.last?.1.id ?? "") + "\u{1F}" + comp
+                path.append((comp, ActivityNode(id: id, level: level, title: title, app: seg.app, domain: domain, path: p)))
+            }
+            if byProject { add("p\(s.projectId ?? -1)", .project, projectName(s.projectId)) }
+            add("a" + seg.app, .app, seg.app)
             if seg.isWeb, let domain = seg.domain {
-                let dId = "\(appId)\u{1F}d\u{1F}\(domain)"
-                if domains[dId] == nil { domains[dId] = ActivityNode(id: dId, level: .domain, title: domain, app: seg.app, domain: domain) }
-                add(&domains[dId]!, s)
-                let pTitle = seg.displayTitle.isEmpty ? (seg.url ?? "") : seg.displayTitle
-                let pId = "\(dId)\u{1F}\(pTitle)"
-                if pages[pId] == nil { pages[pId] = ActivityNode(id: pId, level: .page, title: pTitle, app: seg.app, domain: domain) }
-                add(&pages[pId]!, s)
+                add("d" + domain, .domain, domain, domain: domain)
+                let t = seg.displayTitle.isEmpty ? (seg.url ?? "") : seg.displayTitle
+                add("t" + t, .page, t, domain: domain)
+            } else if let file = seg.path {
+                let folder = (file as NSString).deletingLastPathComponent
+                add("f" + folder, .folder, tilde(folder), path: folder)
+                add("n" + file, .file, (file as NSString).lastPathComponent, path: file)
             } else {
-                let tTitle = seg.title.isEmpty ? "(ohne Titel)" : seg.title
-                let tId = "\(appId)\u{1F}t\u{1F}\(tTitle)"
-                if titles[tId] == nil { titles[tId] = ActivityNode(id: tId, level: .title, title: tTitle, app: seg.app) }
-                add(&titles[tId]!, s)
+                let t = seg.title.isEmpty ? "(ohne Titel)" : seg.title
+                add("t" + t, .title, t)
+            }
+
+            var box = root
+            for (comp, template) in path {
+                if box.children[comp] == nil {
+                    box.children[comp] = Box(template)
+                    box.order.append(comp)
+                }
+                box = box.children[comp]!
+                box.node.duration += seg.duration
+                box.node.keys.append(s.id)
+                box.node.projectIds.insert(s.projectId)
+                if case .ambiguous = s.source { box.node.ambiguous = true }
+                if case .keyword(let term) = s.source { box.node.keywords.insert(term) }
             }
         }
 
-        func parentId(_ id: String, dropping n: Int) -> String {
-            id.components(separatedBy: "\u{1F}").dropLast(n).joined(separator: "\u{1F}")
+        func finish(_ box: Box) -> [ActivityNode] {
+            box.order.compactMap { box.children[$0] }.map { child -> ActivityNode in
+                var n = child.node
+                let kids = finish(child)
+                n.children = kids.isEmpty ? nil : kids
+                return n
+            }
+            .sorted { $0.duration > $1.duration }
         }
-        let byDuration: (ActivityNode, ActivityNode) -> Bool = { $0.duration > $1.duration }
-        var domainNodes = domains
-        for id in domainNodes.keys {
-            domainNodes[id]!.children = pages.values.filter { parentId($0.id, dropping: 1) == id }.sorted(by: byDuration)
-        }
-        var result: [ActivityNode] = []
-        for (id, var a) in apps {
-            let kids = titles.values.filter { parentId($0.id, dropping: 2) == id }
-                + domainNodes.values.filter { parentId($0.id, dropping: 2) == id }
-            a.children = kids.isEmpty ? nil : kids.sorted(by: byDuration)
-            result.append(a)
-        }
-        return result.sorted(by: byDuration)
+        return finish(root)
     }
 }
 
@@ -108,6 +130,7 @@ struct ActivityListView: View {
     @State private var onlyUnassigned = false
     @State private var showNoise = false
     @State private var listSelection: Set<String> = []
+    @AppStorage("activityByProject") private var byProject = true
 
     private var filtered: [AttributedSegment] {
         let s = search.trimmingCharacters(in: .whitespaces)
@@ -116,17 +139,24 @@ struct ActivityListView: View {
             if onlyUnassigned && a.projectId != nil { return false }
             guard !s.isEmpty else { return true }
             let seg = a.segment
-            return [seg.app, seg.title, seg.domain ?? "", seg.url ?? "", seg.pageTitle ?? ""].contains { $0.localizedCaseInsensitiveContains(s) }
+            return [seg.app, seg.title, seg.domain ?? "", seg.url ?? "", seg.pageTitle ?? "", seg.path ?? ""].contains { $0.localizedCaseInsensitiveContains(s) }
         }
     }
 
     var body: some View {
         let segments = filtered
-        let nodes = ActivityNode.build(segments)
+        let nodes = ActivityNode.build(segments, byProject: byProject) { id in
+            id == nil ? "Nicht zugeordnet" : (model.project(id)?.name ?? "–")
+        }
         let index = Self.index(nodes)
         VStack(spacing: 0) {
             HStack {
                 TextField("Filtern, z. B. „DFA“", text: $search).textFieldStyle(.roundedBorder).frame(maxWidth: 260)
+                Picker("", selection: $byProject) {
+                    Text("Nach Projekt").tag(true)
+                    Text("Nach App").tag(false)
+                }
+                .pickerStyle(.segmented).labelsHidden().fixedSize()
                 Toggle("Nur nicht zugeordnete", isOn: $onlyUnassigned).toggleStyle(.checkbox)
                 Toggle("Rauschen zeigen", isOn: $showNoise).toggleStyle(.checkbox)
                 Spacer()
@@ -147,8 +177,11 @@ struct ActivityListView: View {
                 let keys = Set(selected.flatMap(\.keys))
                 if !keys.isEmpty {
                     Menu("Zuweisen an") { assignMenu(keys: keys, ruleConditions: nil) }
-                    Menu("Zuweisen und Regel erstellen") {
-                        assignMenu(keys: keys, ruleConditions: selected.map { $0.ruleConditions(search: search) })
+                    let conditions = selected.map { $0.ruleConditions(search: search) }.filter { !$0.isEmpty }
+                    if !conditions.isEmpty {
+                        Menu("Zuweisen und Regel erstellen") {
+                            assignMenu(keys: keys, ruleConditions: conditions)
+                        }
                     }
                     Divider()
                     Button("Kein Projekt") { model.assign(keys, to: Attribution.noProject) }
@@ -186,7 +219,7 @@ struct ActivityListView: View {
                     .overlay(Capsule().stroke(.orange.opacity(0.6)))
                     .help("Stichwörter mehrerer Projekte passen. Bitte von Hand zuweisen oder eine Regel anlegen.")
             }
-            ProjectBadges(ids: node.projectIds)
+            if node.level != .project { ProjectBadges(ids: node.projectIds) }
             Text(Fmt.duration(node.duration)).monospacedDigit().foregroundStyle(.secondary).frame(width: 64, alignment: .trailing)
         }
         .help(node.keywords.isEmpty ? node.title : "\(node.title)\nzugeordnet per Stichwort: \(node.keywords.sorted().joined(separator: ", "))")

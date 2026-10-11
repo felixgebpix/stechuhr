@@ -11,15 +11,21 @@ public struct Segment: Identifiable, Hashable, Sendable {
     public var url: String?
     public var domain: String?
     public var pageTitle: String?
+    /// Path of the document shown in the window, if the app exposes it.
+    public var path: String?
     public var isNoise: Bool = false
 
     public var id: String { key }
     public var isWeb: Bool { url != nil }
-    public var displayTitle: String { pageTitle ?? title }
+    public var displayTitle: String {
+        if let pageTitle { return pageTitle }
+        if title.isEmpty, let path { return (path as NSString).lastPathComponent }
+        return title
+    }
     public var duration: TimeInterval { span.duration }
 
     public init(key: String, span: TimeSpan, app: String, title: String, url: String? = nil,
-                domain: String? = nil, pageTitle: String? = nil, isNoise: Bool = false) {
+                domain: String? = nil, pageTitle: String? = nil, path: String? = nil, isNoise: Bool = false) {
         self.key = key
         self.span = span
         self.app = app
@@ -27,6 +33,7 @@ public struct Segment: Identifiable, Hashable, Sendable {
         self.url = url
         self.domain = domain
         self.pageTitle = pageTitle
+        self.path = path
         self.isNoise = isNoise
     }
 }
@@ -52,6 +59,7 @@ public enum Segmenter {
             out.append(Segment(key: "e\(e.id)", span: clipped, app: e.app, title: e.title, url: url,
                                domain: url.map { domain(of: $0) ?? $0 },
                                pageTitle: (e.pageTitle?.isEmpty ?? true) ? nil : e.pageTitle,
+                               path: (e.path?.isEmpty ?? true) ? nil : e.path,
                                isNoise: clipped.duration < noiseThreshold))
         }
         return out

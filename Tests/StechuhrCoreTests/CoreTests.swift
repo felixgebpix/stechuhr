@@ -281,3 +281,101 @@ final class HookSecurityTests: XCTestCase {
         XCTAssertEqual(perms, 0o600)
     }
 }
+
+final class BlockTests: XCTestCase {
+    let p1 = Project(id: 1, name: "Stechuhr", colorHex: "#f00")
+    let p2 = Project(id: 2, name: "DFA", colorHex: "#0f0")
+
+    func testToolAppsInheritSurroundingProject() {
+        let segs = [
+            seg("a", 0, 5, app: "Waterfox", title: "Stechuhr – Docs"),
+            seg("b", 5, 6, app: "GitKraken", title: "GitKraken Desktop"),
+            seg("c", 6, 8, app: "Signal", title: "Chat"),
+        ]
+        var settings = AppSettings()
+        settings.toolApps = ["GitKraken"]
+        let r = DayReport.build(day: day, segments: segs, assignments: [:], rules: [], projects: [p1], manualTasks: [],
+                                claudeEvents: [], folders: [], settings: settings, now: t(100))
+        XCTAssertEqual(r.segments.map(\.projectId), [1, 1, nil])  // Signal is no tool → stays unassigned
+        XCTAssertEqual(r.segments[1].source, .context)
+    }
+
+    func testClaudeWindowTakesProjectOfItsSession() {
+        let home = NSHomeDirectory()
+        let events = [ClaudeEvent(sessionId: "s", event: "UserPromptSubmit", ts: t(0), cwd: home + "/repos/stechuhr"),
+                      ClaudeEvent(sessionId: "s", event: "Stop", ts: t(30), cwd: home + "/repos/stechuhr")]
+        let r = DayReport.build(day: day, segments: [seg("c", 5, 10, app: "Claude", title: "Claude")], assignments: [:], rules: [],
+                                projects: [p1], manualTasks: [], claudeEvents: events, folders: [], settings: AppSettings(), now: t(100))
+        XCTAssertEqual(r.segments[0].projectId, 1)
+        XCTAssertEqual(r.segments[0].source, .claudeSession)
+    }
+
+    func testEntryCoversToolsButNotOtherProjects() {
+        let segs = [
+            seg("a", 0, 20, app: "Waterfox", title: "Stechuhr"),
+            seg("m", 20, 25, app: "Mail", title: "DFA Angebot"),  // own signal for DFA
+            seg("x", 25, 30, app: "Signal", title: "Chat"),        // no signal
+            seg("b", 30, 50, app: "Waterfox", title: "Stechuhr"),
+        ]
+        let entry = TimeEntry(projectId: 1, span: span(0, 60))
+        let r = DayReport.build(day: day, segments: segs, assignments: [:], rules: [], projects: [p1, p2], manualTasks: [],
+                                claudeEvents: [], folders: [], settings: AppSettings(), now: t(100), entries: [entry])
+        let s1 = r.stats.first { $0.projectId == 1 }!
+        XCTAssertEqual(s1.foreground, 55 * 60)   // 0–60 minus DFA mail 20–25
+        XCTAssertEqual(s1.confirmed, 55 * 60)
+        XCTAssertEqual(r.stats.first { $0.projectId == 2 }!.foreground, 5 * 60)
+        XCTAssertEqual(r.segments[2].source, .entry)
+        XCTAssertTrue(r.suggestions.isEmpty)
+    }
+
+    func testSuggestionsBridgeInterleavedWork() {
+        // Stechuhr work with short tool switches and a 3-minute pause → one block.
+        let segs = [
+            seg("a", 0, 10, app: "Waterfox", title: "Stechuhr"),
+            seg("b", 10, 11, app: "GitKraken", title: ""),
+            seg("c", 14, 30, app: "Waterfox", title: "Stechuhr"),
+            seg("d", 60, 62, app: "Waterfox", title: "Stechuhr"),   // too short alone
+        ]
+        var settings = AppSettings()
+        settings.toolApps = ["GitKraken"]
+        let r = DayReport.build(day: day, segments: segs, assignments: [:], rules: [], projects: [p1], manualTasks: [],
+                                claudeEvents: [], folders: [], settings: settings, now: t(100))
+        XCTAssertEqual(r.suggestions.map(\.span), [span(0, 30)])
+        XCTAssertEqual(r.suggestions.first?.projectId, 1)
+        XCTAssertEqual(r.suggestions.first?.title, "Stechuhr")
+    }
+
+    func testDocumentPathInMappedFolder() {
+        let home = NSHomeDirectory()
+        var s = seg("f", 0, 10, app: "Vorschau", title: "Angebot.pdf")
+        s.path = home + "/Kunden/DFA/Angebot.pdf"
+        let out = Attribution.attribute([s], assignments: [:], rules: [],
+                                        context: .init(folders: [FolderMapping(path: "~/Kunden/DFA", projectId: 2)]))
+        XCTAssertEqual(out[0].projectId, 2)
+        XCTAssertEqual(out[0].source, .folder)
+        XCTAssertTrue(RuleCondition(.path, .prefix, "~/Kunden").matches(s))
+        XCTAssertTrue(RuleCondition(.title, .suffix, ".pdf").matches(s))
+    }
+}
+
+final class ProjectSuggesterTests: XCTestCase {
+    func testGroupsClonesAndPrefixes() {
+        let c = [
+            ProjectSuggester.Candidate(path: "/r/timetracker", remote: "felix/stechuhr"),
+            ProjectSuggester.Candidate(path: "/r/stechuhr", remote: "felix/stechuhr"),
+            ProjectSuggester.Candidate(path: "/r/appmarsch", remote: "felix/appmarsch"),
+            ProjectSuggester.Candidate(path: "/r/appmarsch-vergleich"),
+            ProjectSuggester.Candidate(path: "/r/padi-abrechnung", remote: "felix/padi-abrechnung"),
+            ProjectSuggester.Candidate(path: "/r/known"),
+        ]
+        let s = ProjectSuggester.suggest(c, projects: [Project(id: 9, name: "Known", colorHex: "#000")], folders: [])
+        XCTAssertEqual(s.map(\.name), ["appmarsch", "padi-abrechnung", "stechuhr"])
+        XCTAssertEqual(s.first { $0.name == "stechuhr" }?.folders, ["/r/stechuhr", "/r/timetracker"])
+        XCTAssertEqual(s.first { $0.name == "appmarsch" }?.folders.count, 2)
+    }
+
+    func testNormalizeRemote() {
+        XCTAssertEqual(ProjectSuggester.normalize(remote: "https://github.com/Felix/Stechuhr.git"), "felix/stechuhr")
+        XCTAssertEqual(ProjectSuggester.normalize(remote: "git@github.com:felix/app.git"), "felix/app")
+    }
+}

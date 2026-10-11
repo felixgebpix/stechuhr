@@ -23,6 +23,8 @@ final class AppModel: ObservableObject {
     @Published var page: Page? = .day
     /// Rules proposed from repeated manual assignments.
     @Published private(set) var suggestions: [RuleSuggestion] = []
+    /// Projects proposed from folders (e.g. git repos in ~/repos).
+    @Published private(set) var projectSuggestions: [ProjectSuggestion] = []
 
     private var recorder: ActivityRecorder?
     private var hookServer: HookServer?
@@ -43,6 +45,7 @@ final class AppModel: ObservableObject {
         lastHookEvent = (try? db.lastClaudeEvent())?.ts
         startRecorder()
         refreshSuggestions()
+        refreshProjectSuggestions()
         timer = Timer.scheduledTimer(withTimeInterval: 15, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.tick() }
         }
@@ -121,7 +124,8 @@ final class AppModel: ObservableObject {
             rules: rules, projects: projects,
             manualTasks: (try? db.backgroundTasks(overlapping: daySpan)) ?? [],
             claudeEvents: (try? db.claudeEvents(around: daySpan)) ?? [],
-            folders: folders, settings: settings, now: Date())
+            folders: folders, settings: settings, now: Date(),
+            entries: (try? db.timeEntries(overlapping: daySpan)) ?? [])
         let valid = Set(report?.segments.map(\.id) ?? [])
         selection = selection.filter(valid.contains)
     }
@@ -213,6 +217,10 @@ final class AppModel: ObservableObject {
         case .manual: return s.projectId == nil ? "von Hand: kein Projekt" : "von Hand zugewiesen"
         case .rule: return "per Regel"
         case .keyword(let term): return "per Stichwort „\(term)“"
+        case .folder: return "per Ordner (Dateipfad)"
+        case .claudeSession: return "per Claude-Code-Session"
+        case .context: return "aus dem Umfeld (Werkzeug-App)"
+        case .entry: return "per Zeiteintrag"
         case .ambiguous(let ids): return "mehrdeutig: " + ids.compactMap { project($0)?.name }.joined(separator: ", ")
         case .absorbedNoise: return "kurzer Wechsel, eingerechnet"
         case .ignoredNoise: return "Rauschen, ignoriert"
@@ -262,6 +270,82 @@ final class AppModel: ObservableObject {
         return save(Project(name: name, colorHex: palette[projects.count % palette.count]))
     }
 
+    // MARK: - Time entries
+
+    func save(_ entry: TimeEntry) {
+        _ = try? db.save(entry)
+        recompute()
+    }
+
+    func deleteTimeEntry(_ id: Int64) {
+        try? db.deleteTimeEntry(id)
+        recompute()
+    }
+
+    func accept(_ block: BlockSuggestion, projectId: Int64? = nil) {
+        guard let pid = projectId ?? block.projectId else { return }
+        save(TimeEntry(projectId: pid, span: block.span, title: block.title))
+    }
+
+    /// Confirms all suggestions that already have a project.
+    func acceptAllBlocks() {
+        for b in report?.suggestions ?? [] where b.projectId != nil {
+            _ = try? db.save(TimeEntry(projectId: b.projectId!, span: b.span, title: b.title))
+        }
+        recompute()
+    }
+
+    /// A time entry spanning the selected snippets, with the most frequent project preselected.
+    func entryFromSelection() -> TimeEntry? {
+        let sel = report?.segments.filter { selection.contains($0.id) } ?? []
+        guard let start = sel.map(\.segment.span.start).min(), let end = sel.map(\.segment.span.end).max() else { return nil }
+        var weight: [Int64: TimeInterval] = [:]
+        for s in sel { if let p = s.projectId { weight[p, default: 0] += s.segment.duration } }
+        let pid = weight.max { $0.value < $1.value }?.key ?? activeProjects.first?.id ?? 0
+        return TimeEntry(projectId: pid, span: TimeSpan(start, end))
+    }
+
+    // MARK: - Project suggestions
+
+    func refreshProjectSuggestions() {
+        let roots = settings.projectRoots
+        let claudeFolders = recentClaudeFolders().map(\.cwd)
+        let projects = projects, folders = folders
+        Task.detached {
+            let candidates = ProjectSuggester.scan(roots: roots, claudeFolders: claudeFolders)
+            let result = ProjectSuggester.suggest(candidates, projects: projects, folders: folders)
+            await MainActor.run { self.projectSuggestions = result }
+        }
+    }
+
+    func create(_ suggestions: [ProjectSuggestion]) {
+        for s in suggestions {
+            let id = newProject(named: s.name)
+            if !s.keywords.isEmpty, var p = project(id) {
+                p.keywords = s.keywords
+                _ = try? db.save(p)
+            }
+            for f in s.folders { try? db.save(FolderMapping(path: f, projectId: id)) }
+        }
+        reloadConfig()
+        recompute()
+        refreshProjectSuggestions()
+    }
+
+    /// Finder drop: one folder → project named after it; several → one project named after their common parent.
+    func createProject(fromFolders urls: [URL]) {
+        let dirs = urls.filter { (try? $0.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true }
+        guard !dirs.isEmpty else { return }
+        let name: String
+        if dirs.count == 1 {
+            name = dirs[0].lastPathComponent
+        } else {
+            let parents = Set(dirs.map { $0.deletingLastPathComponent().path })
+            name = parents.count == 1 ? URL(fileURLWithPath: parents.first!).lastPathComponent : dirs[0].lastPathComponent
+        }
+        create([ProjectSuggestion(name: name, folders: dirs.map(\.path), keywords: [], reason: "Finder")])
+    }
+
     // MARK: - Background tasks
 
     func save(_ task: BackgroundEntry) {
@@ -280,6 +364,7 @@ final class AppModel: ObservableObject {
         try? db.save(FolderMapping(path: folder, projectId: projectId))
         folders = (try? db.folderMappings()) ?? []
         recompute()
+        refreshProjectSuggestions()
     }
 
     func deleteFolderMapping(_ id: Int64) {
@@ -299,6 +384,7 @@ final class AppModel: ObservableObject {
         try? db.save(s)
         recorder?.idleThreshold = s.idleThreshold
         recompute()
+        refreshProjectSuggestions()
     }
 }
 

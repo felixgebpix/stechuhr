@@ -45,14 +45,17 @@ public struct KeywordMatcher: Sendable {
     }
 
     public func match(_ segment: Segment) -> Result {
-        match([segment.app, segment.title, segment.pageTitle ?? "", segment.url ?? ""])
+        match([segment.app, segment.title, segment.pageTitle ?? "", segment.url ?? "", segment.path.map(Self.homeRelative) ?? ""])
     }
 
     /// Folder names below the home directory, e.g. ~/repos/dfa-website → "repos/dfa-website".
     public func match(folder cwd: String) -> Result {
+        match([Self.homeRelative(cwd)])
+    }
+
+    static func homeRelative(_ path: String) -> String {
         let home = NSHomeDirectory()
-        let rel = cwd.hasPrefix(home) ? String(cwd.dropFirst(home.count)) : cwd
-        return match([rel])
+        return path.hasPrefix(home) ? String(path.dropFirst(home.count)) : path
     }
 
     static func normalize(_ s: String) -> String {
@@ -137,6 +140,13 @@ public enum RuleSuggester {
         // Candidate patterns from general to specific.
         func candidates(_ seg: Segment) -> [[RuleCondition]] {
             var out: [[RuleCondition]] = []
+            if let p = seg.path, !p.isEmpty {
+                let folder = (p as NSString).deletingLastPathComponent
+                let home = NSHomeDirectory()
+                if folder.count > home.count + 1 {
+                    out.append([RuleCondition(.path, .prefix, folder.replacingOccurrences(of: home, with: "~", options: .anchored))])
+                }
+            }
             if let d = seg.domain, !d.isEmpty {
                 out.append([RuleCondition(.domain, .equals, d)])
                 if let t = seg.pageTitle, !t.isEmpty { out.append([RuleCondition(.domain, .equals, d), RuleCondition(.title, .equals, t)]) }
