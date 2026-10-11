@@ -7,6 +7,8 @@ struct ProjectsView: View {
     @EnvironmentObject var model: AppModel
     @State private var newName = ""
     @State private var confirmDelete: Project?
+    @State private var picked: Set<String> = []
+    @State private var dropTargeted = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -15,8 +17,42 @@ struct ProjectsView: View {
                     .onSubmit(add)
                 Button("Anlegen", action: add).disabled(newName.trimmingCharacters(in: .whitespaces).isEmpty)
                 Spacer()
+                Text("Tipp: Ordner aus dem Finder hierher ziehen legt ein Projekt mit Ordner-Zuordnung an.")
+                    .font(.caption).foregroundStyle(.secondary)
             }
             .padding(10)
+            if !model.projectSuggestions.isEmpty {
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack {
+                        Label("Vorgeschlagene Projekte aus deinen Ordnern", systemImage: "lightbulb").font(.headline)
+                        Spacer()
+                        Button("Alle auswählen") { picked = Set(model.projectSuggestions.map(\.id)) }
+                        Button("Ausgewählte anlegen (\(picked.count))") {
+                            model.create(model.projectSuggestions.filter { picked.contains($0.id) })
+                            picked = []
+                        }
+                        .disabled(picked.isEmpty)
+                    }
+                    ForEach(model.projectSuggestions) { s in
+                        Toggle(isOn: Binding(get: { picked.contains(s.id) },
+                                             set: { if $0 { picked.insert(s.id) } else { picked.remove(s.id) } })) {
+                            HStack {
+                                Text(s.name).fontWeight(.medium)
+                                Text(s.folders.map(ActivityNode.tilde).joined(separator: ", "))
+                                    .font(.caption.monospaced()).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
+                                Spacer()
+                                Text(s.reason).font(.caption).foregroundStyle(.secondary)
+                            }
+                        }
+                        .toggleStyle(.checkbox)
+                    }
+                    Text("Angelegt wird je ein Projekt mit Ordner-Zuordnung. Claude-Code-Sessions und Dokumente in diesen Ordnern zählen dann automatisch dazu.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                .padding(10)
+                .background(Color.yellow.opacity(0.12), in: RoundedRectangle(cornerRadius: 8))
+                .padding(.horizontal, 10).padding(.bottom, 10)
+            }
             Table(model.projects) {
                 TableColumn("Farbe") { p in
                     ColorPicker("", selection: Binding(get: { Color(hex: p.colorHex) },
@@ -52,6 +88,16 @@ struct ProjectsView: View {
             }
         }
         .navigationTitle("Projekte")
+        .onAppear { model.refreshProjectSuggestions() }
+        .dropDestination(for: URL.self) { urls, _ in
+            model.createProject(fromFolders: urls)
+            return true
+        } isTargeted: { dropTargeted = $0 }
+        .overlay {
+            if dropTargeted {
+                RoundedRectangle(cornerRadius: 10).stroke(Color.accentColor, lineWidth: 3).padding(4)
+            }
+        }
         .alert("Projekt löschen?", isPresented: Binding(get: { confirmDelete != nil }, set: { if !$0 { confirmDelete = nil } }),
                presenting: confirmDelete) { p in
             Button("Löschen", role: .destructive) { model.deleteProject(p.id) }
@@ -343,6 +389,8 @@ struct GeneralSettingsView: View {
     @EnvironmentObject var model: AppModel
     @State private var s = AppSettings()
     @State private var terminals = ""
+    @State private var tools = ""
+    @State private var roots = ""
 
     var body: some View {
         Form {
@@ -354,6 +402,21 @@ struct GeneralSettingsView: View {
                 Text("Kürzere Wechsel werden dem umgebenden Projekt zugerechnet, wenn davor und danach dasselbe Projekt lief, sonst ignoriert. Alles darüber behält seine eigene Zuordnung.")
                     .font(.caption).foregroundStyle(.secondary)
                 Stepper("Arbeitsblock: Pausen bis \(Int(s.blockGap / 60)) min zählen zum selben Block", value: $s.blockGap, in: 0...1800, step: 60)
+            }
+            Section("Werkzeug-Apps und Block-Vorschläge") {
+                VStack(alignment: .leading) {
+                    Text("Werkzeug-Apps (eine pro Zeile)")
+                    TextEditor(text: $tools).font(.body.monospaced()).frame(height: 110)
+                    Text("Diese Apps sind Werkzeuge, keine Projekte. Ohne eigenen Hinweis bekommen sie das Projekt der Arbeit davor oder danach.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                Stepper("Umfeld: bis \(Int(s.inheritWindow / 60)) min davor/danach suchen", value: $s.inheritWindow, in: 60...1800, step: 60)
+                Stepper("Vorschläge: Lücken bis \(Int(s.suggestionGap / 60)) min überbrücken", value: $s.suggestionGap, in: 60...1800, step: 60)
+                Stepper("Vorschläge: erst ab \(Int(s.minSuggestion / 60)) min Länge", value: $s.minSuggestion, in: 60...3600, step: 60)
+                VStack(alignment: .leading) {
+                    Text("Projektordner für Vorschläge (einer pro Zeile)")
+                    TextEditor(text: $roots).font(.body.monospaced()).frame(height: 44)
+                }
             }
             Section("Claude Code") {
                 Stepper("Laufende Session ohne Lebenszeichen nach \(Int(s.claudeStaleAfter / 60)) min beenden",
@@ -380,7 +443,10 @@ struct GeneralSettingsView: View {
             HStack {
                 Spacer()
                 Button("Speichern") {
-                    s.terminalApps = terminals.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+                    let lines: (String) -> [String] = { $0.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty } }
+                    s.terminalApps = lines(terminals)
+                    s.toolApps = lines(tools)
+                    s.projectRoots = lines(roots)
                     model.save(s)
                 }
                 .keyboardShortcut(.defaultAction)
@@ -391,6 +457,8 @@ struct GeneralSettingsView: View {
         .onAppear {
             s = model.settings
             terminals = s.terminalApps.joined(separator: "\n")
+            tools = s.toolApps.joined(separator: "\n")
+            roots = s.projectRoots.joined(separator: "\n")
         }
     }
 }

@@ -12,9 +12,10 @@ public struct RecordedEvent: Hashable, Sendable {
     public var title: String
     public var url: String?
     public var pageTitle: String?
+    public var path: String?
 
     public init(id: Int64 = 0, span: TimeSpan, app: String, bundleId: String = "", title: String,
-                url: String? = nil, pageTitle: String? = nil) {
+                url: String? = nil, pageTitle: String? = nil, path: String? = nil) {
         self.id = id
         self.span = span
         self.app = app
@@ -22,6 +23,7 @@ public struct RecordedEvent: Hashable, Sendable {
         self.title = title
         self.url = url
         self.pageTitle = pageTitle
+        self.path = path
     }
 }
 
@@ -32,6 +34,7 @@ struct Observation: Equatable {
     var title: String
     var url: String?
     var pageTitle: String?
+    var path: String?
 }
 
 public enum Permissions {
@@ -120,7 +123,7 @@ public final class ActivityRecorder: @unchecked Sendable {
         }
         close(at: current.map { now.timeIntervalSince($0.lastSeen) < interval * 3 + 5 ? now : $0.lastSeen } ?? now)
         let event = RecordedEvent(span: TimeSpan(now, now), app: obs.app, bundleId: obs.bundleId, title: obs.title,
-                                  url: obs.url, pageTitle: obs.pageTitle)
+                                  url: obs.url, pageTitle: obs.pageTitle, path: obs.path)
         if let id = try? db.insertRecorded(event) {
             current = (id, obs, now, now)
         }
@@ -136,7 +139,8 @@ public final class ActivityRecorder: @unchecked Sendable {
         guard let app = NSWorkspace.shared.frontmostApplication else { return nil }
         let name = app.localizedName ?? app.bundleIdentifier ?? "Unbekannt"
         let bundle = app.bundleIdentifier ?? ""
-        var obs = Observation(app: name, bundleId: bundle, title: Self.windowTitle(pid: app.processIdentifier) ?? "")
+        let window = Self.focusedWindow(pid: app.processIdentifier)
+        var obs = Observation(app: name, bundleId: bundle, title: window.title ?? "", path: window.path)
         switch browserTab(bundle: bundle) {
         case .tab(let url, let title):
             obs.url = url
@@ -149,15 +153,23 @@ public final class ActivityRecorder: @unchecked Sendable {
         return obs
     }
 
-    static func windowTitle(pid: pid_t) -> String? {
-        guard AXIsProcessTrusted() else { return nil }
+    /// Title and – for document-based apps – the file path of the focused window.
+    static func focusedWindow(pid: pid_t) -> (title: String?, path: String?) {
+        guard AXIsProcessTrusted() else { return (nil, nil) }
         let app = AXUIElementCreateApplication(pid)
         AXUIElementSetMessagingTimeout(app, 0.5)
         var window: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(app, kAXFocusedWindowAttribute as CFString, &window) == .success, let window else { return nil }
+        guard AXUIElementCopyAttributeValue(app, kAXFocusedWindowAttribute as CFString, &window) == .success, let window else { return (nil, nil) }
+        let element = window as! AXUIElement
         var title: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(window as! AXUIElement, kAXTitleAttribute as CFString, &title) == .success else { return nil }
-        return title as? String
+        _ = AXUIElementCopyAttributeValue(element, kAXTitleAttribute as CFString, &title)
+        var document: CFTypeRef?
+        _ = AXUIElementCopyAttributeValue(element, kAXDocumentAttribute as CFString, &document)
+        var path: String?
+        if let doc = document as? String, let url = URL(string: doc), url.isFileURL {
+            path = url.path
+        }
+        return (title as? String, path)
     }
 
     // MARK: - Browsers

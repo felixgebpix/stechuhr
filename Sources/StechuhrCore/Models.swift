@@ -25,7 +25,7 @@ public struct Project: Identifiable, Hashable, Sendable {
 }
 
 public enum RuleField: String, Codable, CaseIterable, Sendable {
-    case app, title, domain, url
+    case app, title, domain, url, path
 
     public var label: String {
         switch self {
@@ -33,17 +33,20 @@ public enum RuleField: String, Codable, CaseIterable, Sendable {
         case .title: "Titel"
         case .domain: "Domain"
         case .url: "URL"
+        case .path: "Dateipfad"
         }
     }
 }
 
 public enum RuleMatch: String, Codable, CaseIterable, Sendable {
-    case equals, contains, regex
+    case equals, contains, prefix, suffix, regex
 
     public var label: String {
         switch self {
         case .equals: "ist"
         case .contains: "enthält"
+        case .prefix: "beginnt mit"
+        case .suffix: "endet mit"
         case .regex: "Regex"
         }
     }
@@ -67,12 +70,18 @@ public struct RuleCondition: Codable, Hashable, Sendable {
         case .title: candidate = segment.displayTitle
         case .domain: candidate = segment.domain ?? ""
         case .url: candidate = segment.url ?? ""
+        case .path: candidate = segment.path ?? ""
         }
         switch match {
         case .equals:
             return candidate.caseInsensitiveCompare(value) == .orderedSame
         case .contains:
             return !value.isEmpty && candidate.range(of: value, options: [.caseInsensitive, .diacriticInsensitive]) != nil
+        case .prefix:
+            let v = field == .path ? (value as NSString).expandingTildeInPath : value
+            return !v.isEmpty && candidate.range(of: v, options: [.caseInsensitive, .diacriticInsensitive, .anchored]) != nil
+        case .suffix:
+            return !value.isEmpty && candidate.range(of: value, options: [.caseInsensitive, .diacriticInsensitive, .anchored, .backwards]) != nil
         case .regex:
             return candidate.range(of: value, options: [.regularExpression, .caseInsensitive]) != nil
         }
@@ -116,7 +125,23 @@ public struct BackgroundEntry: Identifiable, Hashable, Sendable {
     }
 }
 
-/// A Claude Code folder → project mapping. Subfolders are included.
+/// A confirmed block of time for one project ("Zeiteintrag"). Inside its span, every snippet without
+/// its own, different project counts for this project – short switches to tools no longer fragment the day.
+public struct TimeEntry: Identifiable, Hashable, Sendable {
+    public var id: Int64
+    public var projectId: Int64
+    public var span: TimeSpan
+    public var title: String
+
+    public init(id: Int64 = 0, projectId: Int64, span: TimeSpan, title: String = "") {
+        self.id = id
+        self.projectId = projectId
+        self.span = span
+        self.title = title
+    }
+}
+
+/// A folder → project mapping (Claude Code working folders and document paths). Subfolders are included.
 public struct FolderMapping: Identifiable, Hashable, Sendable {
     public var id: Int64
     public var path: String
@@ -129,7 +154,8 @@ public struct FolderMapping: Identifiable, Hashable, Sendable {
     }
 
     public func covers(_ cwd: String) -> Bool {
-        let base = path.hasSuffix("/") ? String(path.dropLast()) : path
+        let expanded = (path as NSString).expandingTildeInPath
+        let base = expanded.hasSuffix("/") ? String(expanded.dropLast()) : expanded
         return cwd == base || cwd.hasPrefix(base + "/")
     }
 
@@ -149,6 +175,18 @@ public struct AppSettings: Sendable, Equatable {
     /// No keyboard/mouse input for this long counts as away.
     public var idleThreshold: TimeInterval = 180
     public var terminalApps: [String] = ["Terminal", "iTerm2", "Ghostty", "WezTerm", "Warp", "Alacritty", "kitty", "Hyper", "Tabby", "Claude"]
+    /// Apps that are tools rather than projects: without their own hint they take the project of the surrounding work.
+    public var toolApps: [String] = ["Claude", "Terminal", "iTerm2", "Ghostty", "WezTerm", "Warp", "GitKraken", "Tower", "Fork",
+                                     "GitHub Desktop", "Sourcetree", "Finder", "Systemeinstellungen", "System Settings",
+                                     "1Password", "Bitwarden", "MacPass", "Stechuhr", "Code", "Cursor", "Xcode", "Vorschau", "Preview"]
+    /// How far (in time) a tool app looks for the surrounding project.
+    public var inheritWindow: TimeInterval = 300
+    /// Block suggestions: gaps up to this length stay in one block.
+    public var suggestionGap: TimeInterval = 300
+    /// Block suggestions shorter than this are not proposed.
+    public var minSuggestion: TimeInterval = 300
+    /// Folders scanned for project suggestions (e.g. ~/repos).
+    public var projectRoots: [String] = ["~/repos"]
 
     public init() {}
 }

@@ -9,17 +9,27 @@ Native macOS-Zeiterfassung für Arbeit mit viel Kontextwechsel. Alles läuft lok
 
 ## Automatische Zuordnung
 
-Reihenfolge, die erste passende Stufe gewinnt:
-1. **Von Hand** zugewiesen (Liste, Timeline, Mehrfachauswahl)
-2. **Regeln** (z. B. „App ist Figma und Titel enthält Acme“)
-3. **Stichwörter**: Projektname plus eigene Stichwörter pro Projekt, als ganze Wörter gesucht in Fenstertitel,
-   Seitentitel und URL. Passen mehrere Projekte, bleibt der Schnipsel „mehrdeutig“ und unzugeordnet.
-4. sonst **nicht zugeordnet**
+Zwei Ebenen, wie bei Timing: Stechuhr zeichnet **App-Nutzung** fein auf und schlägt daraus **Zeiteinträge**
+(Blöcke) vor. Bestätigte Blöcke zählen ganz für ihr Projekt, kurze Abstecher zu Werkzeugen fragmentieren nichts mehr.
 
-Claude-Code-Ordner: feste Ordner-Zuordnung, sonst Projektname/Stichwort im Pfad (z. B. `~/repos/acme-website` → Acme).
+Reihenfolge pro Schnipsel, die erste passende Stufe gewinnt:
+1. **Von Hand** zugewiesen
+2. **Regeln** (App, Titel, Domain, URL, Dateipfad; ist / enthält / beginnt mit / endet mit / Regex)
+3. **Ordner**: Dokumentpfad liegt in einem zugeordneten Ordner (z. B. `~/Kunden/Acme`)
+4. **Stichwörter**: Projektname + Stichwörter als ganze Wörter in Titel, URL, Pfad; mehrere Treffer → „mehrdeutig“
+5. **Claude-Code-Session**: Claude-App/Terminal zeigt eine Session → Projekt ihres Arbeitsordners
+6. **Umfeld**: Werkzeug-Apps (Claude, GitKraken, Terminal, Finder, …) ohne eigenen Hinweis übernehmen das Projekt
+   der Arbeit davor/danach (bis 5 min)
 
-**Lernen:** Weist du ähnliche Schnipsel mehrmals von Hand demselben Projekt zu (≥ 3×, an ≥ 2 Tagen oder ≥ 30 min,
-≥ 90 % eindeutig), schlägt Stechuhr unter „Regeln“ eine passende Regel vor. Sie gilt erst, wenn du sie übernimmst.
+**Zeiteinträge**: In der Timeline oben erscheinen Vorschläge gestrichelt. Klick prüft und übernimmt, ⌥-Klick übernimmt
+direkt, „Vorschläge übernehmen“ bestätigt alle mit erkanntem Projekt. Innerhalb eines Zeiteintrags zählt alles für
+dessen Projekt, außer Schnipseln, die eindeutig zu einem anderen Projekt gehören.
+
+**Projekte aus Ordnern**: Stechuhr schlägt Projekte aus `~/repos` (einstellbar) und Claude-Code-Ordnern vor; Klone
+desselben Git-Repos und Ordner mit gleichem Namensanfang werden zusammengefasst. Ordner aus dem Finder auf die
+Projektseite ziehen legt ebenfalls Projekte mit Ordner-Zuordnung an.
+
+**Lernen**: Wiederholte manuelle Zuweisungen (≥ 3×, ≥ 90 % eindeutig) ergeben Regel-Vorschläge unter „Regeln“.
 
 ## Bauen und starten
 

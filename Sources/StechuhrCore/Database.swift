@@ -34,6 +34,13 @@ public final class Database {
         try exec("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")
         try migrate()
         try addColumnIfMissing("projects", "keywords", "TEXT NOT NULL DEFAULT '[]'")
+        try addColumnIfMissing("foreground_events", "path", "TEXT")
+        try exec("""
+            CREATE TABLE IF NOT EXISTS time_entries(
+                id INTEGER PRIMARY KEY, project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+                start REAL NOT NULL, end REAL NOT NULL, title TEXT NOT NULL DEFAULT '');
+            CREATE INDEX IF NOT EXISTS time_entries_start ON time_entries(start);
+            """)
     }
 
     deinit { sqlite3_close(db) }
@@ -213,7 +220,7 @@ public final class Database {
     public func manualSamples(since: Date) throws -> [(event: RecordedEvent, projectId: Int64, day: String)] {
         var out: [(RecordedEvent, Int64, String)] = []
         try run("""
-            SELECT f.id, f.start, f.end, f.app, f.bundle_id, f.title, f.url, f.page_title, a.project_id, a.day
+            SELECT f.id, f.start, f.end, f.app, f.bundle_id, f.title, f.url, f.page_title, a.project_id, a.day, f.path
             FROM assignments a JOIN foreground_events f ON a.segment_key = 'e' || f.id
             WHERE f.start >= ? AND a.project_id != 0
             """, [.double(since.timeIntervalSince1970)]) { s in
@@ -221,7 +228,7 @@ public final class Database {
                                   span: TimeSpan(Date(timeIntervalSince1970: sqlite3_column_double(s, 1)),
                                                  Date(timeIntervalSince1970: sqlite3_column_double(s, 2))),
                                   app: self.text(s, 3) ?? "", bundleId: self.text(s, 4) ?? "", title: self.text(s, 5) ?? "",
-                                  url: self.text(s, 6), pageTitle: self.text(s, 7))
+                                  url: self.text(s, 6), pageTitle: self.text(s, 7), path: self.text(s, 10))
             out.append((e, sqlite3_column_int64(s, 8), self.text(s, 9) ?? ""))
         }
         return out
@@ -343,9 +350,9 @@ public final class Database {
 
     @discardableResult
     public func insertRecorded(_ e: RecordedEvent) throws -> Int64 {
-        try run("INSERT INTO foreground_events(start, end, app, bundle_id, title, url, page_title) VALUES (?,?,?,?,?,?,?)",
+        try run("INSERT INTO foreground_events(start, end, app, bundle_id, title, url, page_title, path) VALUES (?,?,?,?,?,?,?,?)",
                 [.double(e.span.start.timeIntervalSince1970), .double(e.span.end.timeIntervalSince1970), .text(e.app),
-                 .text(e.bundleId), .text(e.title), opt(e.url), opt(e.pageTitle)])
+                 .text(e.bundleId), .text(e.title), opt(e.url), opt(e.pageTitle), opt(e.path)])
     }
 
     public func extendRecorded(id: Int64, to end: Date) throws {
@@ -355,17 +362,44 @@ public final class Database {
     public func recorded(overlapping span: TimeSpan) throws -> [RecordedEvent] {
         var out: [RecordedEvent] = []
         try run("""
-            SELECT id, start, end, app, bundle_id, title, url, page_title FROM foreground_events
+            SELECT id, start, end, app, bundle_id, title, url, page_title, path FROM foreground_events
             WHERE start < ? AND end > ? ORDER BY start
             """, [.double(span.end.timeIntervalSince1970), .double(span.start.timeIntervalSince1970)]) { s in
             out.append(RecordedEvent(id: sqlite3_column_int64(s, 0),
                                      span: TimeSpan(Date(timeIntervalSince1970: sqlite3_column_double(s, 1)),
                                                     Date(timeIntervalSince1970: sqlite3_column_double(s, 2))),
                                      app: self.text(s, 3) ?? "", bundleId: self.text(s, 4) ?? "", title: self.text(s, 5) ?? "",
-                                     url: self.text(s, 6), pageTitle: self.text(s, 7)))
+                                     url: self.text(s, 6), pageTitle: self.text(s, 7), path: self.text(s, 8)))
         }
         return out
     }
+
+    // MARK: - Time entries
+
+    public func timeEntries(overlapping span: TimeSpan) throws -> [TimeEntry] {
+        var out: [TimeEntry] = []
+        try run("SELECT id, project_id, start, end, title FROM time_entries WHERE start < ? AND end > ? ORDER BY start",
+                [.double(span.end.timeIntervalSince1970), .double(span.start.timeIntervalSince1970)]) { s in
+            out.append(TimeEntry(id: sqlite3_column_int64(s, 0), projectId: sqlite3_column_int64(s, 1),
+                                 span: TimeSpan(Date(timeIntervalSince1970: sqlite3_column_double(s, 2)),
+                                                Date(timeIntervalSince1970: sqlite3_column_double(s, 3))),
+                                 title: self.text(s, 4) ?? ""))
+        }
+        return out
+    }
+
+    @discardableResult
+    public func save(_ e: TimeEntry) throws -> Int64 {
+        let params: [Value] = [.int(e.projectId), .double(e.span.start.timeIntervalSince1970),
+                               .double(e.span.end.timeIntervalSince1970), .text(e.title)]
+        if e.id == 0 {
+            return try run("INSERT INTO time_entries(project_id, start, end, title) VALUES (?,?,?,?)", params)
+        }
+        try run("UPDATE time_entries SET project_id=?, start=?, end=?, title=? WHERE id=?", params + [.int(e.id)])
+        return e.id
+    }
+
+    public func deleteTimeEntry(_ id: Int64) throws { try run("DELETE FROM time_entries WHERE id=?", [.int(id)]) }
 
     // MARK: - Settings
 
@@ -378,6 +412,11 @@ public final class Database {
         if let v = values["claudeStaleAfter"].flatMap(Double.init) { s.claudeStaleAfter = v }
         if let v = values["idleThreshold"].flatMap(Double.init) { s.idleThreshold = v }
         if let v = values["terminalApps"] { s.terminalApps = v.split(separator: "\n").map(String.init) }
+        if let v = values["toolApps"] { s.toolApps = v.split(separator: "\n").map(String.init) }
+        if let v = values["projectRoots"] { s.projectRoots = v.split(separator: "\n").map(String.init) }
+        if let v = values["inheritWindow"].flatMap(Double.init) { s.inheritWindow = v }
+        if let v = values["suggestionGap"].flatMap(Double.init) { s.suggestionGap = v }
+        if let v = values["minSuggestion"].flatMap(Double.init) { s.minSuggestion = v }
         return s
     }
 
@@ -386,6 +425,9 @@ public final class Database {
             "noiseThreshold": String(s.noiseThreshold), "blockGap": String(s.blockGap),
             "claudeStaleAfter": String(s.claudeStaleAfter), "idleThreshold": String(s.idleThreshold),
             "terminalApps": s.terminalApps.joined(separator: "\n"),
+            "toolApps": s.toolApps.joined(separator: "\n"), "projectRoots": s.projectRoots.joined(separator: "\n"),
+            "inheritWindow": String(s.inheritWindow), "suggestionGap": String(s.suggestionGap),
+            "minSuggestion": String(s.minSuggestion),
         ]
         try transaction {
             for (k, v) in values {

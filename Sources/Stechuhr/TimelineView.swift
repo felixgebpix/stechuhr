@@ -8,6 +8,8 @@ struct DayTimeline: View {
     @EnvironmentObject var model: AppModel
     let report: DayReport
     var onEditTask: (BackgroundEntry) -> Void
+    var onEditEntry: (TimeEntry) -> Void
+    var onSuggestion: (BlockSuggestion) -> Void
 
     @State private var zoom: CGFloat = 1
     @State private var hover: String?
@@ -70,6 +72,15 @@ struct DayTimeline: View {
                 case .sessionOpen:
                     let r = item.rect.insetBy(dx: 0, dy: item.rect.height / 2 - 1)
                     ctx.fill(Path(r), with: .color(.secondary.opacity(0.35)))
+                case .suggestion:
+                    // Proposed block: dashed outline, click to confirm.
+                    let path = Path(roundedRect: item.rect.insetBy(dx: 1, dy: 1), cornerRadius: 3)
+                    let c = color(for: item)
+                    ctx.fill(path, with: .color(c.opacity(0.18)))
+                    ctx.stroke(path, with: .color(c), style: StrokeStyle(lineWidth: 1.5, dash: [4, 3]))
+                    if item.rect.width > 60, let label = item.label {
+                        ctx.draw(Text(label).font(.caption2).foregroundColor(.primary), in: item.rect.insetBy(dx: 4, dy: 5))
+                    }
                 default:
                     let path = Path(roundedRect: item.rect, cornerRadius: 3)
                     ctx.fill(path, with: .color(color(for: item)))
@@ -128,6 +139,12 @@ struct DayTimeline: View {
             }
         case .manual(let id):
             if let task = report.manualTasks.first(where: { $0.id == id }) { onEditTask(task) }
+        case .entry(let id):
+            if let entry = report.entries.first(where: { $0.id == id }) { onEditEntry(entry) }
+        case .suggestion(let id):
+            guard let s = report.suggestions.first(where: { $0.id == id }) else { return }
+            // ⌥-click confirms directly (like in Timing), plain click opens the editor.
+            if NSEvent.modifierFlags.contains(.option), s.projectId != nil { model.accept(s) } else { onSuggestion(s) }
         default:
             break
         }
@@ -142,7 +159,7 @@ struct TimelineLane: Identifiable {
 }
 
 enum TimelineItemKind: Hashable {
-    case segment(String), manual(Int64), claude, sessionOpen
+    case segment(String), manual(Int64), claude, sessionOpen, entry(Int64), suggestion(String)
 }
 
 struct TimelineItem {
@@ -192,7 +209,11 @@ struct TimelineLayout {
         if hi.timeIntervalSince(lo) < 4 * 3600 { hi = min(report.day.end, lo.addingTimeInterval(4 * 3600)) }
         range = TimeSpan(max(lo, report.day.start), min(hi, report.day.end))
 
-        var lanes = [TimelineLane(id: "fg", title: "Ich (Vordergrund)", icon: "person.fill", help: "Aktive Fenster aus der Vordergrund-Erfassung")]
+        var lanes = [
+            TimelineLane(id: "entries", title: "Zeiteinträge", icon: "checkmark.seal",
+                         help: "Bestätigte Blöcke. Gestrichelt: Vorschläge – Klick zum Prüfen, ⌥-Klick übernimmt direkt."),
+            TimelineLane(id: "fg", title: "Ich (Vordergrund)", icon: "person.fill", help: "Aktive Fenster aus der Vordergrund-Erfassung"),
+        ]
         // Pack manual background tasks into as few lanes as possible.
         var laneEnds: [Date] = []
         var manualLane: [Int64: Int] = [:]
@@ -214,7 +235,7 @@ struct TimelineLayout {
             lanes.append(TimelineLane(id: "cc-\(run.sessionId)", title: "Claude · \(run.title ?? run.folderName)",
                                       icon: "sparkles", help: "\(run.cwd)\nSession \(run.sessionId)"))
         }
-        self.manualLane = manualLane.mapValues { $0 + 1 }
+        self.manualLane = manualLane.mapValues { $0 + 2 }
         self.sessionLane = sessionLane
         self.lanes = lanes
     }
@@ -255,14 +276,26 @@ struct TimelineLayout {
             let seg = s.segment
             let what = seg.isWeb ? "\(seg.app) · \(seg.domain ?? "") · \(seg.displayTitle)" : "\(seg.app) · \(seg.title)"
             let note = " → \(projectName(s.projectId) ?? "kein Projekt") (\(explain(s)))"
-            out.append(TimelineItem(kind: .segment(seg.key), rect: laneRect(0, seg.span.start, seg.span.end, width),
+            out.append(TimelineItem(kind: .segment(seg.key), rect: laneRect(1, seg.span.start, seg.span.end, width),
                                     start: seg.span.start, end: seg.span.end, projectId: s.projectId, app: seg.app,
                                     label: seg.app,
                                     tooltip: "\(Fmt.time(seg.span.start))–\(Fmt.time(seg.span.end)) · \(Fmt.duration(seg.duration)) · \(what)\(note)",
                                     ignored: s.source == .ignoredNoise))
         }
+        for e in report.entries {
+            out.append(TimelineItem(kind: .entry(e.id), rect: laneRect(0, e.span.start, e.span.end, width),
+                                    start: e.span.start, end: e.span.end, projectId: e.projectId,
+                                    label: e.title.isEmpty ? projectName(e.projectId) : e.title,
+                                    tooltip: "Zeiteintrag \(Fmt.time(e.span.start))–\(Fmt.time(e.span.end)) · \(Fmt.duration(e.span.duration)) · \(projectName(e.projectId) ?? "–")\(e.title.isEmpty ? "" : " · \(e.title)") – Klick zum Bearbeiten"))
+        }
+        for b in report.suggestions {
+            out.append(TimelineItem(kind: .suggestion(b.id), rect: laneRect(0, b.span.start, b.span.end, width),
+                                    start: b.span.start, end: b.span.end, projectId: b.projectId,
+                                    label: projectName(b.projectId) ?? "Projekt wählen …",
+                                    tooltip: "Vorschlag \(Fmt.time(b.span.start))–\(Fmt.time(b.span.end)) · \(projectName(b.projectId) ?? "ohne Projekt") · aktiv \(Fmt.duration(b.activeTime)) · \(b.apps.joined(separator: ", "))\(b.title.isEmpty ? "" : " · \(b.title)") – Klick: prüfen, ⌥-Klick: übernehmen"))
+        }
         for t in report.manualTasks {
-            let lane = manualLane[t.id] ?? 1
+            let lane = manualLane[t.id] ?? 2
             out.append(TimelineItem(kind: .manual(t.id), rect: laneRect(lane, t.span.start, t.span.end, width),
                                     start: t.span.start, end: t.span.end, projectId: t.projectId,
                                     label: t.note.isEmpty ? "Hintergrund" : t.note,
