@@ -91,11 +91,24 @@ public enum Attribution {
         }
 
         // Tool apps take the project of the nearest snippet with its own signal (previous preferred).
-        let anchors = out.indices.filter { out[$0].source.isOwnSignal && out[$0].projectId != nil }
+        // Two linear passes instead of searching around every snippet – days have thousands of snippets.
+        let isAnchor: (Int) -> Bool = { out[$0].source.isOwnSignal && out[$0].projectId != nil }
+        var prevAnchor = [Int?](repeating: nil, count: out.count)
+        var nextAnchor = [Int?](repeating: nil, count: out.count)
+        var last: Int?
+        for i in out.indices {
+            prevAnchor[i] = last
+            if isAnchor(i) { last = i }
+        }
+        last = nil
+        for i in out.indices.reversed() {
+            nextAnchor[i] = last
+            if isAnchor(i) { last = i }
+        }
         for i in out.indices where out[i].source == .none && context.toolApps.contains(out[i].segment.app.lowercased()) {
             let seg = out[i].segment
-            let prev = anchors.last { $0 < i && seg.span.start.timeIntervalSince(out[$0].segment.span.end) <= context.inheritWindow }
-            let next = anchors.first { $0 > i && out[$0].segment.span.start.timeIntervalSince(seg.span.end) <= context.inheritWindow }
+            let prev = prevAnchor[i].flatMap { seg.span.start.timeIntervalSince(out[$0].segment.span.end) <= context.inheritWindow ? $0 : nil }
+            let next = nextAnchor[i].flatMap { out[$0].segment.span.start.timeIntervalSince(seg.span.end) <= context.inheritWindow ? $0 : nil }
             if let src = prev ?? next {
                 out[i].projectId = out[src].projectId
                 out[i].source = .context
@@ -103,10 +116,20 @@ public enum Attribution {
         }
 
         // Noise inherits the project only if the snippets before and after belong to the same project.
-        let real = out.indices.filter { out[$0].source != .ignoredNoise }
+        var prevReal = [Int?](repeating: nil, count: out.count)
+        var nextReal = [Int?](repeating: nil, count: out.count)
+        last = nil
+        for i in out.indices {
+            prevReal[i] = last
+            if out[i].source != .ignoredNoise { last = i }
+        }
+        last = nil
+        for i in out.indices.reversed() {
+            nextReal[i] = last
+            if out[i].source != .ignoredNoise { last = i }
+        }
         for i in out.indices where out[i].source == .ignoredNoise {
-            let prev = real.last { $0 < i }, next = real.first { $0 > i }
-            if let prev, let next, let p = out[prev].projectId, out[next].projectId == p {
+            if let prev = prevReal[i], let next = nextReal[i], let p = out[prev].projectId, out[next].projectId == p {
                 out[i].projectId = p
                 out[i].source = .absorbedNoise
             }
