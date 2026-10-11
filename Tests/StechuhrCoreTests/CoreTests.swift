@@ -256,3 +256,28 @@ final class SuggestionTests: XCTestCase {
         XCTAssertEqual(s.map(\.conditions), [[RuleCondition(.app, .equals, "Figma")]])
     }
 }
+
+final class HookSecurityTests: XCTestCase {
+    func testParsesHeadersLowercased() {
+        let raw = Data("POST /v1/claude-code/events HTTP/1.1\r\nHost: 127.0.0.1:47600\r\nX-Stechuhr-Token: abc\r\nContent-Length: 2\r\n\r\n{}".utf8)
+        let req = HTTPRequest.parse(raw)
+        XCTAssertEqual(req?.headers["x-stechuhr-token"], "abc")
+        XCTAssertEqual(req?.headers["host"], "127.0.0.1:47600")
+    }
+
+    func testTokenComparison() {
+        XCTAssertTrue(HookToken.matches("abcd", "abcd"))
+        XCTAssertFalse(HookToken.matches("abce", "abcd"))
+        XCTAssertFalse(HookToken.matches(nil, "abcd"))
+        XCTAssertFalse(HookToken.matches("abc", "abcd"))
+    }
+
+    func testTokenFileIsPrivateAndStable() throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let a = HookToken.loadOrCreate(at: url)
+        XCTAssertEqual(a.count, 64)
+        XCTAssertEqual(HookToken.loadOrCreate(at: url), a)
+        let perms = try FileManager.default.attributesOfItem(atPath: url.path)[.posixPermissions] as? Int
+        XCTAssertEqual(perms, 0o600)
+    }
+}

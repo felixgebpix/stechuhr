@@ -11,6 +11,8 @@ public enum StechuhrPaths {
     public static var database: URL { supportDir.appendingPathComponent("stechuhr.sqlite") }
     /// Fallback inbox the hook helper appends to when the app is not running.
     public static var hookInbox: URL { supportDir.appendingPathComponent("claude-events.jsonl") }
+    /// Shared secret for the localhost endpoint (mode 0600).
+    public static var hookToken: URL { supportDir.appendingPathComponent("hook-token") }
     public static var hookBinary: URL { supportDir.appendingPathComponent("bin/stechuhr-hook") }
     public static let hookPort: UInt16 = 47600
 }

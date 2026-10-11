@@ -1,14 +1,43 @@
 import Foundation
 import Network
+import Security
+
+/// Shared secret between the app and `stechuhr-hook`, stored in a file only the user can read.
+/// Without it, any local process or web page could post fake events to the localhost endpoint.
+public enum HookToken {
+    public static func loadOrCreate(at url: URL = StechuhrPaths.hookToken) -> String {
+        if let existing = try? String(contentsOf: url, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines),
+           existing.count >= 32 {
+            return existing
+        }
+        var bytes = [UInt8](repeating: 0, count: 32)
+        guard SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes) == errSecSuccess else {
+            fatalError("Stechuhr: kein Zufallsgenerator verfügbar")
+        }
+        let token = bytes.map { String(format: "%02x", $0) }.joined()
+        FileManager.default.createFile(atPath: url.path, contents: Data(token.utf8), attributes: [.posixPermissions: 0o600])
+        return token
+    }
+
+    /// Constant-time comparison.
+    static func matches(_ a: String?, _ b: String) -> Bool {
+        guard let a, a.utf8.count == b.utf8.count else { return false }
+        return zip(a.utf8, b.utf8).reduce(0) { $0 | ($1.0 ^ $1.1) } == 0
+    }
+}
 
 /// Tiny HTTP endpoint on 127.0.0.1 that receives events from `stechuhr-hook`.
 /// Accepts `POST /v1/claude-code/events` with one JSON event, and `GET /health`.
+/// Every request needs the `X-Stechuhr-Token` header. Requests from browsers (with an `Origin` header)
+/// or with a foreign `Host` (DNS rebinding) are rejected.
 public final class HookServer: @unchecked Sendable {
     private var listener: NWListener?
     private let queue = DispatchQueue(label: "stechuhr.hookserver")
     private let onEvent: @Sendable (ClaudeEvent) -> Void
+    private let token: String
 
-    public init(onEvent: @escaping @Sendable (ClaudeEvent) -> Void) {
+    public init(token: String, onEvent: @escaping @Sendable (ClaudeEvent) -> Void) {
+        self.token = token
         self.onEvent = onEvent
     }
 
@@ -26,6 +55,8 @@ public final class HookServer: @unchecked Sendable {
 
     private func handle(_ conn: NWConnection) {
         conn.start(queue: queue)
+        // Don't let idle connections pile up.
+        queue.asyncAfter(deadline: .now() + 5) { conn.cancel() }
         receive(conn, buffer: Data())
     }
 
@@ -33,8 +64,9 @@ public final class HookServer: @unchecked Sendable {
         conn.receive(minimumIncompleteLength: 1, maximumLength: 64 * 1024) { [weak self] data, _, done, error in
             guard let self else { return }
             var buffer = buffer
+            if buffer.count > 64 * 1024 { conn.cancel(); return }
             if let data { buffer.append(data) }
-            if buffer.count > 1_000_000 || error != nil { conn.cancel(); return }
+            if buffer.count > 64 * 1024 || error != nil { conn.cancel(); return }
             if let req = HTTPRequest.parse(buffer) {
                 self.respond(conn, to: req)
             } else if done {
@@ -47,7 +79,13 @@ public final class HookServer: @unchecked Sendable {
 
     private func respond(_ conn: NWConnection, to req: HTTPRequest) {
         var status = "404 Not Found"
-        if req.method == "GET" && req.path == "/health" {
+        let port = String(StechuhrPaths.hookPort)
+        let hostOK = ["127.0.0.1:\(port)", "localhost:\(port)"].contains(req.headers["host"]?.lowercased() ?? "")
+        if req.headers["origin"] != nil || !hostOK {
+            status = "403 Forbidden"
+        } else if !HookToken.matches(req.headers["x-stechuhr-token"], token) {
+            status = "401 Unauthorized"
+        } else if req.method == "GET" && req.path == "/health" {
             status = "200 OK"
         } else if req.method == "POST" && req.path == "/v1/claude-code/events" {
             if let event = try? ClaudeEvent.decode(req.body) {
@@ -65,6 +103,8 @@ public final class HookServer: @unchecked Sendable {
 struct HTTPRequest {
     var method: String
     var path: String
+    /// Lower-cased header names.
+    var headers: [String: String] = [:]
     var body: Data
 
     /// Returns nil until the full request (headers + Content-Length body) is in the buffer.
@@ -74,16 +114,17 @@ struct HTTPRequest {
         let lines = head.components(separatedBy: "\r\n")
         let parts = lines.first?.split(separator: " ") ?? []
         guard parts.count >= 2 else { return nil }
-        var length = 0
+        var headers: [String: String] = [:]
         for line in lines.dropFirst() {
             let kv = line.split(separator: ":", maxSplits: 1)
-            if kv.count == 2, kv[0].trimmingCharacters(in: .whitespaces).lowercased() == "content-length" {
-                length = Int(kv[1].trimmingCharacters(in: .whitespaces)) ?? 0
+            if kv.count == 2 {
+                headers[kv[0].trimmingCharacters(in: .whitespaces).lowercased()] = kv[1].trimmingCharacters(in: .whitespaces)
             }
         }
+        let length = max(0, Int(headers["content-length"] ?? "0") ?? 0)
         let body = data[headerEnd.upperBound...]
         guard body.count >= length else { return nil }
-        return HTTPRequest(method: String(parts[0]), path: String(parts[1]), body: Data(body.prefix(length)))
+        return HTTPRequest(method: String(parts[0]), path: String(parts[1]), headers: headers, body: Data(body.prefix(length)))
     }
 }
 

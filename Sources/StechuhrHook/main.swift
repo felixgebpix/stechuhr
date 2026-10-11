@@ -19,26 +19,33 @@ for k in keep { if let v = raw[k] as? String { event[k] = v } }
 if event["cwd"] == nil { event["cwd"] = FileManager.default.currentDirectoryPath }
 guard let body = try? JSONSerialization.data(withJSONObject: event) else { exit(0) }
 
+let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+let dir = base.appendingPathComponent("Stechuhr", isDirectory: true)
+let token = (try? String(contentsOf: dir.appendingPathComponent("hook-token"), encoding: .utf8))?
+    .trimmingCharacters(in: .whitespacesAndNewlines)
+
 var delivered = false
 var req = URLRequest(url: URL(string: "http://127.0.0.1:\(port)/v1/claude-code/events")!)
 req.httpMethod = "POST"
 req.httpBody = body
 req.setValue("application/json", forHTTPHeaderField: "Content-Type")
 req.timeoutInterval = 0.8
-let config = URLSessionConfiguration.ephemeral
-config.timeoutIntervalForRequest = 0.8
-config.timeoutIntervalForResource = 0.8
-config.connectionProxyDictionary = [:]
-let done = DispatchSemaphore(value: 0)
-URLSession(configuration: config).dataTask(with: req) { _, resp, _ in
-    delivered = ((resp as? HTTPURLResponse)?.statusCode ?? 0) / 100 == 2
-    done.signal()
-}.resume()
-_ = done.wait(timeout: .now() + 1.0)
+// Without a token the app has never run, so it could not accept the event anyway → straight to the inbox.
+if let token {
+    req.setValue(token, forHTTPHeaderField: "X-Stechuhr-Token")
+    let config = URLSessionConfiguration.ephemeral
+    config.timeoutIntervalForRequest = 0.8
+    config.timeoutIntervalForResource = 0.8
+    config.connectionProxyDictionary = [:]
+    let done = DispatchSemaphore(value: 0)
+    URLSession(configuration: config).dataTask(with: req) { _, resp, _ in
+        delivered = ((resp as? HTTPURLResponse)?.statusCode ?? 0) / 100 == 2
+        done.signal()
+    }.resume()
+    _ = done.wait(timeout: .now() + 1.0)
+}
 
 if !delivered {
-    let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-    let dir = base.appendingPathComponent("Stechuhr", isDirectory: true)
     try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
     let path = dir.appendingPathComponent("claude-events.jsonl").path
     // One write() with O_APPEND keeps concurrent hook calls from interleaving lines.
