@@ -3,7 +3,7 @@ import PackageDescription
 
 let package = Package(
     name: "Stechuhr",
-    platforms: [.macOS(.v14)],
+    platforms: [.macOS(.v15)],
     products: [
         .executable(name: "Stechuhr", targets: ["Stechuhr"]),
         .executable(name: "stechuhr-hook", targets: ["StechuhrHook"]),

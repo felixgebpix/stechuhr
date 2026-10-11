@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import ServiceManagement
 import StechuhrCore
 
 struct ProjectsView: View {
@@ -315,6 +316,29 @@ struct ClaudeFoldersView: View {
     }
 }
 
+/// Registers Stechuhr as a login item, so recording runs without opening the app by hand.
+struct LaunchAtLoginToggle: View {
+    @State private var enabled = SMAppService.mainApp.status == .enabled
+    @State private var error: String?
+
+    var body: some View {
+        VStack(alignment: .leading) {
+            Toggle("Beim Anmelden automatisch starten", isOn: Binding(get: { enabled }, set: { on in
+                do {
+                    if on { try SMAppService.mainApp.register() } else { try SMAppService.mainApp.unregister() }
+                    error = nil
+                } catch {
+                    self.error = error.localizedDescription
+                }
+                enabled = SMAppService.mainApp.status == .enabled
+            }))
+            Text("Stechuhr lebt in der Menüleiste. Ohne Autostart wird nur aufgezeichnet, wenn du die App selbst startest.")
+                .font(.caption).foregroundStyle(.secondary)
+            if let error { Text(error).font(.caption).foregroundStyle(.red) }
+        }
+    }
+}
+
 struct GeneralSettingsView: View {
     @EnvironmentObject var model: AppModel
     @State private var s = AppSettings()
@@ -322,6 +346,9 @@ struct GeneralSettingsView: View {
 
     var body: some View {
         Form {
+            Section("Start") {
+                LaunchAtLoginToggle()
+            }
             Section("Fragmentiertes Arbeiten") {
                 Stepper("Rauschen: Wechsel unter \(Int(s.noiseThreshold)) s ignorieren", value: $s.noiseThreshold, in: 0...60, step: 1)
                 Text("Kürzere Wechsel werden dem umgebenden Projekt zugerechnet, wenn davor und danach dasselbe Projekt lief, sonst ignoriert. Alles darüber behält seine eigene Zuordnung.")
