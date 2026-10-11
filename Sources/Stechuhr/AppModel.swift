@@ -129,7 +129,7 @@ final class AppModel: ObservableObject {
     // MARK: - Hooks
 
     private func startHookServer() {
-        let server = HookServer { [weak self] event in
+        let server = HookServer(token: HookToken.loadOrCreate()) { [weak self] event in
             Task { @MainActor in self?.receive(event) }
         }
         do {

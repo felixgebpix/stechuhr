@@ -52,3 +52,13 @@ Er bricht nach spätestens ~1 s ab und gibt immer Exit-Code 0 zurück.
 Eingabe (`PermissionRequest`, `Notification` mit `permission_prompt`/`idle_prompt`/`elicitation_dialog`), pausiert die
 Zeit; die nächste Tool-Aktivität setzt sie fort. Ist ein Terminal mit dieser Session im Vordergrund, zählt die Zeit
 als Vordergrund und wird nicht zusätzlich als Hintergrund gewertet.
+
+## Sicherheit und Datenschutz
+
+- Alle Daten bleiben lokal in `~/Library/Application Support/Stechuhr/`. Es gibt keine Verbindung ins Internet.
+- Der Hook-Empfang lauscht nur auf `127.0.0.1:47600` und verlangt einen geheimen Schlüssel
+  (`hook-token`, Dateirechte 0600), den die App beim ersten Start erzeugt. Anfragen mit `Origin`-Header
+  (Browser) oder fremdem `Host` (DNS-Rebinding) werden abgewiesen.
+- Der Hook-Helfer überträgt nie Prompt-Texte oder Antworten von Claude, nur Zeitstempel, Session-ID, Ereignis und Arbeitsordner.
+- Aufgezeichnet werden App-Namen, Fenstertitel und URLs aktiver Browser-Tabs. Private Browserfenster werden ohne Titel und URL erfasst.
+  Die Datenbank ist nicht verschlüsselt; sie ist so geschützt wie dein Benutzerkonto (FileVault empfohlen).
