@@ -9,15 +9,18 @@ public struct Project: Identifiable, Hashable, Sendable {
     /// Whether Claude Code background time counts towards the billable total.
     public var claudeBillable: Bool
     public var archived: Bool
+    /// Extra words (besides the name) that identify this project in titles, URLs and folder names.
+    public var keywords: [String]
 
     public init(id: Int64 = 0, name: String, colorHex: String, backgroundBillable: Bool = true,
-                claudeBillable: Bool = true, archived: Bool = false) {
+                claudeBillable: Bool = true, archived: Bool = false, keywords: [String] = []) {
         self.id = id
         self.name = name
         self.colorHex = colorHex
         self.backgroundBillable = backgroundBillable
         self.claudeBillable = claudeBillable
         self.archived = archived
+        self.keywords = keywords
     }
 }
 

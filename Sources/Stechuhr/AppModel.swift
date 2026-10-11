@@ -20,6 +20,9 @@ final class AppModel: ObservableObject {
     /// Selected foreground snippets (shared by timeline and activity list).
     @Published var selection: Set<String> = []
     @Published var colorByProject = true
+    @Published var page: Page? = .day
+    /// Rules proposed from repeated manual assignments.
+    @Published private(set) var suggestions: [RuleSuggestion] = []
 
     private var recorder: ActivityRecorder?
     private var hookServer: HookServer?
@@ -39,6 +42,7 @@ final class AppModel: ObservableObject {
         startHookServer()
         lastHookEvent = (try? db.lastClaudeEvent())?.ts
         startRecorder()
+        refreshSuggestions()
         timer = Timer.scheduledTimer(withTimeInterval: 15, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.tick() }
         }
@@ -160,12 +164,58 @@ final class AppModel: ObservableObject {
         guard !keys.isEmpty else { return }
         try? db.assign(Array(keys), day: dayKey, projectId: projectId)
         recompute()
+        refreshSuggestions()
+    }
+
+    // MARK: - Learning from manual assignments
+
+    func refreshSuggestions() {
+        let f = DateFormatter()
+        f.dateFormat = "yyyy-MM-dd"
+        let rows = (try? db.manualSamples(since: Date().addingTimeInterval(-30 * 86400))) ?? []
+        var samples: [RuleSuggester.Sample] = []
+        for row in rows {
+            guard let seg = Segmenter.segments(from: [row.event], day: row.event.span, noiseThreshold: 0).first else { continue }
+            samples.append(RuleSuggester.Sample(segment: seg, projectId: row.projectId, day: row.day))
+        }
+        let active = Set(activeProjects.map(\.id))
+        suggestions = RuleSuggester.suggest(from: samples, rules: rules, dismissed: db.dismissedSuggestions())
+            .filter { active.contains($0.projectId) }
+    }
+
+    func accept(_ s: RuleSuggestion) {
+        addRule(s.conditions, projectId: s.projectId)
+    }
+
+    func dismiss(_ s: RuleSuggestion) {
+        try? db.dismissSuggestion(s.id)
+        refreshSuggestions()
+    }
+
+    var keywordMatcher: KeywordMatcher { KeywordMatcher(projects: projects) }
+
+    func resolve(folder cwd: String) -> FolderResolution {
+        FolderResolution.resolve(cwd, folders: folders, keywords: keywordMatcher)
+    }
+
+    /// Short German explanation of why a snippet has its project.
+    func explain(_ s: AttributedSegment) -> String {
+        switch s.source {
+        case .manual: return s.projectId == nil ? "von Hand: kein Projekt" : "von Hand zugewiesen"
+        case .rule: return "per Regel"
+        case .keyword(let term): return "per Stichwort „\(term)“"
+        case .ambiguous(let ids): return "mehrdeutig: " + ids.compactMap { project($0)?.name }.joined(separator: ", ")
+        case .absorbedNoise: return "kurzer Wechsel, eingerechnet"
+        case .ignoredNoise: return "Rauschen, ignoriert"
+        case .none: return "nicht zugeordnet"
+        }
     }
 
     func addRule(_ conditions: [RuleCondition], projectId: Int64) {
         _ = try? db.save(Rule(projectId: projectId, conditions: conditions))
         rules = (try? db.rules()) ?? []
         recompute()
+        refreshSuggestions()
     }
 
     func save(_ rule: Rule) {
@@ -178,6 +228,7 @@ final class AppModel: ObservableObject {
         try? db.deleteRule(id)
         rules = (try? db.rules()) ?? []
         recompute()
+        refreshSuggestions()
     }
 
     // MARK: - Projects

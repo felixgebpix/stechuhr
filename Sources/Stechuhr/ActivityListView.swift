@@ -13,6 +13,8 @@ struct ActivityNode: Identifiable, Hashable {
     var duration: TimeInterval = 0
     var keys: [String] = []
     var projectIds: Set<Int64?> = []
+    var ambiguous = false
+    var keywords: Set<String> = []
     var children: [ActivityNode]?
 
     var icon: String {
@@ -53,6 +55,8 @@ struct ActivityNode: Identifiable, Hashable {
             node.duration += s.segment.duration
             node.keys.append(s.id)
             node.projectIds.insert(s.projectId)
+            if case .ambiguous = s.source { node.ambiguous = true }
+            if case .keyword(let term) = s.source { node.keywords.insert(term) }
         }
 
         for s in segments {
@@ -176,10 +180,16 @@ struct ActivityListView: View {
             Image(systemName: node.icon).foregroundStyle(.secondary).frame(width: 16)
             Text(node.title).lineLimit(1).truncationMode(.middle)
             Spacer(minLength: 8)
+            if node.ambiguous {
+                Text("mehrdeutig").font(.caption2).foregroundStyle(.orange)
+                    .padding(.horizontal, 5).padding(.vertical, 1)
+                    .overlay(Capsule().stroke(.orange.opacity(0.6)))
+                    .help("Stichwörter mehrerer Projekte passen. Bitte von Hand zuweisen oder eine Regel anlegen.")
+            }
             ProjectBadges(ids: node.projectIds)
             Text(Fmt.duration(node.duration)).monospacedDigit().foregroundStyle(.secondary).frame(width: 64, alignment: .trailing)
         }
-        .help(node.title)
+        .help(node.keywords.isEmpty ? node.title : "\(node.title)\nzugeordnet per Stichwort: \(node.keywords.sorted().joined(separator: ", "))")
     }
 
     static func index(_ nodes: [ActivityNode]) -> [String: ActivityNode] {
