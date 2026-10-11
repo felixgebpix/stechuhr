@@ -62,3 +62,7 @@ als Vordergrund und wird nicht zusätzlich als Hintergrund gewertet.
 - Der Hook-Helfer überträgt nie Prompt-Texte oder Antworten von Claude, nur Zeitstempel, Session-ID, Ereignis und Arbeitsordner.
 - Aufgezeichnet werden App-Namen, Fenstertitel und URLs aktiver Browser-Tabs. Private Browserfenster werden ohne Titel und URL erfasst.
   Die Datenbank ist nicht verschlüsselt; sie ist so geschützt wie dein Benutzerkonto (FileVault empfohlen).
+
+## Lizenz
+
+MIT – siehe [LICENSE](LICENSE). Nutzung, Änderung und Weitergabe sind frei, solange der Copyright-Hinweis erhalten bleibt.
