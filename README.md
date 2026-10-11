@@ -1,0 +1,40 @@
+# Stechuhr
+
+Native macOS-Zeiterfassung für Arbeit mit viel Kontextwechsel. Alles läuft lokal.
+
+- **Vordergrund ("Ich")**: Stechuhr zeichnet selbst auf, welche App, welches Fenster und welcher Browser-Tab aktiv ist (alle 2 s). Ohne Maus/Tastatur ab 3 min (einstellbar), bei Bildschirmsperre oder Ruhezustand zählt die Zeit als abwesend.
+- **Hintergrund**: manuell markierte Hintergrundaufgaben und automatisch erfasste Claude-Code-Sessions (über Hooks).
+- **Zuordnung nach Inhalt**: gruppierte Aktivitätsliste (App → Fenstertitel, Browser → Domain → Seitentitel), Gruppen mit einem Klick zuweisen, daraus Regeln machen, Mehrfachauswahl in Liste und Timeline.
+- **Auswertung pro Projekt und Tag**: Vordergrund, Hintergrund (manuell / Claude Code), Überlappung, abrechenbar, Anzahl Arbeitsblöcke, längster Block. Die doppelt gezählte Zeit wird separat ausgewiesen.
+
+## Bauen und starten
+
+```bash
+scripts/build-app.sh            # baut dist/Stechuhr.app
+scripts/build-app.sh --install  # zusätzlich nach /Applications kopieren
+swift test                      # Tests der Zeitlogik
+```
+
+Daten liegen in `~/Library/Application Support/Stechuhr/` (`stechuhr.sqlite`).
+
+### Berechtigungen
+- **Bedienungshilfen** (Systemeinstellungen → Datenschutz & Sicherheit): nötig für Fenstertitel. Ohne sie erfasst Stechuhr nur App-Namen.
+- **Automation** pro Browser (fragt macOS beim ersten Mal): für URL und Titel des aktiven Tabs in Safari, Chrome, Arc, Brave, Edge, Vivaldi und Opera. Private Fenster werden ohne Titel und URL erfasst. Firefox liefert nur den Fenstertitel.
+- Die App ist ad-hoc signiert. Nach einem Neubau mit `build-app.sh` kann macOS die Freigaben deshalb wieder verlangen.
+
+## Claude-Code-Erfassung
+
+Beim Start kopiert die App den Helfer `stechuhr-hook` nach
+`~/Library/Application Support/Stechuhr/bin/stechuhr-hook`. Globale Hooks in `~/.claude/settings.json`
+rufen ihn auf bei `SessionStart`, `UserPromptSubmit`, `Stop`, `StopFailure`, `Notification`,
+`PermissionRequest`, `PostToolUse` (alle `async`) und `SessionEnd` (synchron, Timeout 2 s).
+
+Der Helfer schickt nur `session_id`, Ereignisname, `cwd`, Zeitstempel und ggf. `notification_type` / `source` /
+`reason` / `session_title` an `127.0.0.1:47600`. Prompt-Texte und Antworten werden nie übertragen oder gespeichert.
+Läuft die App nicht, hängt er das Ereignis an `claude-events.jsonl` an; die App liest die Datei beim nächsten Start ein.
+Er bricht nach spätestens ~1 s ab und gibt immer Exit-Code 0 zurück.
+
+**Arbeitszeit einer Session** = von `UserPromptSubmit` bis `Stop`/`StopFailure`/`SessionEnd`. Wartet Claude auf
+Eingabe (`PermissionRequest`, `Notification` mit `permission_prompt`/`idle_prompt`/`elicitation_dialog`), pausiert die
+Zeit; die nächste Tool-Aktivität setzt sie fort. Ist ein Terminal mit dieser Session im Vordergrund, zählt die Zeit
+als Vordergrund und wird nicht zusätzlich als Hintergrund gewertet.
