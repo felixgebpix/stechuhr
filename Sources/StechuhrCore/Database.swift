@@ -417,6 +417,11 @@ public final class Database {
         if let v = values["inheritWindow"].flatMap(Double.init) { s.inheritWindow = v }
         if let v = values["suggestionGap"].flatMap(Double.init) { s.suggestionGap = v }
         if let v = values["minSuggestion"].flatMap(Double.init) { s.minSuggestion = v }
+        if let v = values["askWhenUnclear"] { s.askWhenUnclear = v == "1" }
+        if let v = values["askAfterAway"] { s.askAfterAway = v == "1" }
+        if let v = values["unclearAfter"].flatMap(Double.init) { s.unclearAfter = v }
+        if let v = values["awayThreshold"].flatMap(Double.init) { s.awayThreshold = v }
+        if let v = values["promptCooldown"].flatMap(Double.init) { s.promptCooldown = v }
         return s
     }
 
@@ -428,6 +433,9 @@ public final class Database {
             "toolApps": s.toolApps.joined(separator: "\n"), "projectRoots": s.projectRoots.joined(separator: "\n"),
             "inheritWindow": String(s.inheritWindow), "suggestionGap": String(s.suggestionGap),
             "minSuggestion": String(s.minSuggestion),
+            "askWhenUnclear": s.askWhenUnclear ? "1" : "0", "askAfterAway": s.askAfterAway ? "1" : "0",
+            "unclearAfter": String(s.unclearAfter), "awayThreshold": String(s.awayThreshold),
+            "promptCooldown": String(s.promptCooldown),
         ]
         try transaction {
             for (k, v) in values {

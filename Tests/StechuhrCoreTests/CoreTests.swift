@@ -379,3 +379,28 @@ final class ProjectSuggesterTests: XCTestCase {
         XCTAssertEqual(ProjectSuggester.normalize(remote: "git@github.com:felix/app.git"), "felix/app")
     }
 }
+
+final class ContextPrompterTests: XCTestCase {
+    func a(_ key: String, _ s: Double, _ e: Double, _ pid: Int64?, _ source: AssignmentSource) -> AttributedSegment {
+        AttributedSegment(segment: seg(key, s, e), projectId: pid, source: source)
+    }
+
+    func testAsksAfterThreeMinutesOfUnclearWork() {
+        let segs = [a("1", 0, 20, 1, .keyword("DFA")), a("2", 20, 22, nil, .none), a("3", 22, 24, nil, .ambiguous([1, 2]))]
+        XCTAssertEqual(ContextPrompter.unclear(segments: segs, now: t(24), minDuration: 180), t(20))
+        // Only 2 minutes so far → not yet.
+        XCTAssertNil(ContextPrompter.unclear(segments: Array(segs.prefix(2)), now: t(22), minDuration: 180))
+        // Inherited tool context is clear enough.
+        XCTAssertNil(ContextPrompter.unclear(segments: [a("1", 0, 20, 1, .keyword("DFA")), a("2", 20, 30, 1, .context)], now: t(30), minDuration: 180))
+        // Not active right now → no question.
+        XCTAssertNil(ContextPrompter.unclear(segments: segs, now: t(40), minDuration: 180))
+        XCTAssertEqual(ContextPrompter.candidates(segments: segs, entries: [], before: t(24)), [1, 2])
+    }
+
+    func testAwayAfterReturn() {
+        let ev = [RecordedEvent(id: 1, span: span(0, 10), app: "A", title: ""), RecordedEvent(id: 2, span: span(40, 41), app: "A", title: "")]
+        XCTAssertEqual(ContextPrompter.away(events: ev, covered: [], now: t(41), threshold: 900), span(10, 40))
+        XCTAssertNil(ContextPrompter.away(events: ev, covered: [span(10, 40)], now: t(41), threshold: 900))
+        XCTAssertNil(ContextPrompter.away(events: ev, covered: [], now: t(50), threshold: 900))  // returned too long ago
+    }
+}
