@@ -399,6 +399,32 @@ public final class Database {
         return e.id
     }
 
+    public func timeEntry(id: Int64) throws -> TimeEntry? {
+        var out: TimeEntry?
+        try run("SELECT id, project_id, start, end, title FROM time_entries WHERE id=?", [.int(id)]) { s in
+            out = TimeEntry(id: sqlite3_column_int64(s, 0), projectId: sqlite3_column_int64(s, 1),
+                            span: TimeSpan(Date(timeIntervalSince1970: sqlite3_column_double(s, 2)),
+                                           Date(timeIntervalSince1970: sqlite3_column_double(s, 3))),
+                            title: self.text(s, 4) ?? "")
+        }
+        return out
+    }
+
+    /// Small key/value state that must survive restarts (e.g. the running time entry).
+    public func value(_ key: String) -> String? {
+        var out: String?
+        _ = try? run("SELECT value FROM settings WHERE key=?", [.text(key)]) { s in out = self.text(s, 0) }
+        return out
+    }
+
+    public func setValue(_ value: String?, for key: String) {
+        if let value {
+            _ = try? run("INSERT INTO settings(key, value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", [.text(key), .text(value)])
+        } else {
+            _ = try? run("DELETE FROM settings WHERE key=?", [.text(key)])
+        }
+    }
+
     public func deleteTimeEntry(_ id: Int64) throws { try run("DELETE FROM time_entries WHERE id=?", [.int(id)]) }
 
     // MARK: - Settings

@@ -404,3 +404,64 @@ final class ContextPrompterTests: XCTestCase {
         XCTAssertNil(ContextPrompter.away(events: ev, covered: [], now: t(50), threshold: 900))  // returned too long ago
     }
 }
+
+final class RangeAndPerformanceTests: XCTestCase {
+    func testCSVUsesGermanFormatAndEscapes() {
+        let p = Project(id: 1, name: "Acme; Relaunch", colorHex: "#000")
+        let r = DayReport.build(day: day, segments: [seg("a", 0, 75, title: "x")], assignments: ["a": 1], rules: [], projects: [p],
+                                manualTasks: [], claudeEvents: [], folders: [], settings: AppSettings(), now: t(100),
+                                entries: [TimeEntry(projectId: 1, span: span(0, 90), title: "Konzept \"v2\"")])
+        let csv = CSVExport.projectDays([r]) { $0 == 1 ? p.name : "nicht zugeordnet" }
+        XCTAssertTrue(csv.contains("\"Acme; Relaunch\";1,50;1,50"), csv)
+        let entries = CSVExport.entries([r]) { _ in p.name }
+        XCTAssertTrue(entries.contains("\"Konzept \"\"v2\"\"\""), entries)
+        let sum = RangeReport.aggregate([r, r])
+        XCTAssertEqual(sum.first?.foreground, 2 * 90 * 60)
+    }
+
+    func testFullDayStaysFast() {
+        // ~ a long day: 6000 snippets, 20 projects with keywords, tool apps in between.
+        let projects = (1...20).map { Project(id: Int64($0), name: "Projekt\($0)", colorHex: "#000", keywords: ["kunde\($0)"]) }
+        var segs: [Segment] = []
+        for i in 0..<6000 {
+            let s = Double(i) * 0.15
+            let app = i % 3 == 0 ? "GitKraken" : "Waterfox"
+            segs.append(seg("s\(i)", s, s + 0.14, app: app, title: i % 7 == 0 ? "kunde\(i % 20 + 1) Angebot" : "Seite \(i)"))
+        }
+        var settings = AppSettings()
+        settings.toolApps = ["GitKraken"]
+        let start = Date()
+        let r = DayReport.build(day: day, segments: segs, assignments: [:], rules: [], projects: projects, manualTasks: [],
+                                claudeEvents: [], folders: [], settings: settings, now: t(1000))
+        XCTAssertFalse(r.segments.isEmpty)
+        XCTAssertLessThan(Date().timeIntervalSince(start), 2.0)
+    }
+}
+
+final class RunningEntryTests: XCTestCase {
+    func a(_ key: String, _ s: Double, _ e: Double, _ pid: Int64?, _ source: AssignmentSource) -> AttributedSegment {
+        AttributedSegment(segment: seg(key, s, e), projectId: pid, source: source)
+    }
+    let entry = TimeEntry(projectId: 1, span: span(0, 10))
+
+    func testShortGlanceDoesNotStop() {
+        let segs = [a("1", 10, 20, nil, .none), a("2", 20, 20.5, 2, .keyword("Acme")), a("3", 20.5, 30, nil, .none)]
+        let r = RunningEntry.extend(entry, segments: segs, now: t(30), foreignAfter: 180, awayAfter: 900)
+        XCTAssertEqual(r.end, t(30))
+        XCTAssertTrue(r.running)
+    }
+
+    func testLongForeignWorkStops() {
+        let segs = [a("1", 10, 20, nil, .none), a("2", 20, 25, 2, .keyword("Acme"))]
+        let r = RunningEntry.extend(entry, segments: segs, now: t(25), foreignAfter: 180, awayAfter: 900)
+        XCTAssertEqual(r.end, t(20))
+        XCTAssertFalse(r.running)
+    }
+
+    func testBreakStops() {
+        let segs = [a("1", 10, 20, nil, .none), a("2", 50, 60, nil, .none)]
+        let r = RunningEntry.extend(entry, segments: segs, now: t(60), foreignAfter: 180, awayAfter: 900)
+        XCTAssertEqual(r.end, t(20))
+        XCTAssertFalse(r.running)
+    }
+}

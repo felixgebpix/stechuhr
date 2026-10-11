@@ -37,7 +37,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 }
 
 enum Page: Hashable {
-    case day, projects, rules, folders, settings
+    case day, range, projects, rules, folders, settings
 }
 
 struct ContentView: View {
@@ -47,6 +47,7 @@ struct ContentView: View {
         NavigationSplitView {
             List(selection: $model.page) {
                 Label("Tag", systemImage: "calendar.day.timeline.left").tag(Page.day)
+                Label("Auswertung", systemImage: "chart.bar.doc.horizontal").tag(Page.range)
                 Section("Einrichtung") {
                     Label("Projekte", systemImage: "folder").tag(Page.projects)
                     Label("Regeln", systemImage: "wand.and.stars").badge(model.suggestions.count).tag(Page.rules)
@@ -58,6 +59,7 @@ struct ContentView: View {
         } detail: {
             switch model.page ?? .day {
             case .day: DayView()
+            case .range: RangeView()
             case .projects: ProjectsView()
             case .rules: RulesView()
             case .folders: ClaudeFoldersView()
@@ -122,6 +124,17 @@ struct MenuBarContent: View {
             Text("Heute: \(Fmt.duration(today.stats.reduce(0) { $0 + $1.foreground })) Vordergrund · \(Fmt.duration(today.billableWallClock)) abrechenbar")
         }
         Divider()
+        if let r = model.runningEntry {
+            Text("Jetzt: \(model.project(r.projectId)?.name ?? "–") seit \(Fmt.time(r.span.start))")
+            Button("Stopp") { model.stopWorking() }
+        }
+        Menu("Ich arbeite jetzt an …") {
+            ForEach(model.activeProjects) { p in
+                Button(p.name) { model.startWorking(on: p.id) }
+            }
+        }
+        .disabled(model.activeProjects.isEmpty)
+        Divider()
         if running.isEmpty {
             Text("Keine Claude-Code-Session arbeitet gerade")
         } else {
@@ -140,6 +153,7 @@ struct MenuBarContent: View {
             open(.day)
         }
         .keyboardShortcut("o")
+        Button("Auswertung …") { open(.range) }
         Button("Projekte …") { open(.projects) }
         Button("Einstellungen …") { open(.settings) }
             .keyboardShortcut(",")

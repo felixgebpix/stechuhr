@@ -31,6 +31,22 @@ Projektseite ziehen legt ebenfalls Projekte mit Ordner-Zuordnung an.
 
 **Lernen**: Wiederholte manuelle Zuweisungen (≥ 3×, ≥ 90 % eindeutig) ergeben Regel-Vorschläge unter „Regeln“.
 
+## Nachfragen und laufende Einträge
+
+- **Woran arbeitest du gerade?** Erkennt Stechuhr ≥ 3 min lang kein Projekt, erscheint ein kleines Fenster unter der
+  Menüleiste (stiehlt keinen Fokus). Die Antwort wird ein Zeiteintrag, der weiterläuft.
+- **Nach Abwesenheit** (≥ 15 min): Projekt und Notiz (z. B. „Besprechung“) für die Zeit.
+- **Ich arbeite jetzt an …** im Menüleisten-Menü startet selbst einen laufenden Eintrag, „Stopp“ beendet ihn.
+- Laufende Einträge enden erst nach ≥ 3 min eindeutig anderer Projektarbeit oder einer längeren Pause;
+  kurze Blicke in andere Projekte zählen nicht.
+
+## Auswertung und Export
+
+„Auswertung“ zeigt Woche, Monat oder einen Zeitraum mit Summen pro Projekt. CSV-Export (Excel, deutsches Format:
+Semikolon, Dezimalkomma, Stunden dezimal):
+- **Projekte pro Tag**: Vordergrund, bestätigt, Hintergrund, Claude Code, Überlappung, abrechenbar, Blöcke
+- **Zeiteinträge und Hintergrundaufgaben**: Datum, Von, Bis, Dauer, Projekt, Titel/Notiz
+
 ## Bauen und starten
 
 ```bash

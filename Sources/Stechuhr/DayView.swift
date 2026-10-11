@@ -13,9 +13,10 @@ struct DayView: View {
             header
             if !model.accessibilityGranted {
                 HStack {
-                    Banner(text: "Stechuhr erfasst gerade nur App-Namen. Für Fenstertitel braucht Stechuhr die Bedienungshilfen-Berechtigung.",
+                    Banner(text: "Stechuhr erfasst gerade nur App-Namen, keine Fenstertitel. Steht Stechuhr unter Bedienungshilfen schon auf „an“, gehört der Eintrag zu einer älteren Version: mit „–“ entfernen und Stechuhr neu hinzufügen (z. B. aus dem Finder hineinziehen).",
                            systemImage: "lock.shield")
-                    Button("Berechtigung öffnen") { Permissions.openAccessibilitySettings() }.padding(.trailing, 8)
+                    Button("Im Finder zeigen") { NSWorkspace.shared.activateFileViewerSelecting([Bundle.main.bundleURL]) }
+                    Button("Einstellungen öffnen") { Permissions.openAccessibilitySettings() }.padding(.trailing, 8)
                 }
                 .background(Color.orange.opacity(0.15))
             }

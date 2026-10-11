@@ -39,6 +39,7 @@ final class AppModel: ObservableObject {
         settings = db.loadSettings()
         reloadConfig()
         AppModel.shared = self
+        runningEntry = db.value("runningEntryId").flatMap(Int64.init).flatMap { try? db.timeEntry(id: $0) }
         installHookHelper()
         HookInbox.drain(into: db)
         startHookServer()
@@ -128,6 +129,19 @@ final class AppModel: ObservableObject {
         return f.string(from: day)
     }
 
+    /// Reports for every day in [from, to], built step by step so the UI stays responsive.
+    func reports(from: Date, to: Date) async -> [DayReport] {
+        var out: [DayReport] = []
+        var d = Calendar.current.startOfDay(for: from)
+        let last = Calendar.current.startOfDay(for: to)
+        while d <= last {
+            out.append(buildReport(for: d))
+            await Task.yield()
+            d = Calendar.current.date(byAdding: .day, value: 1, to: d)!
+        }
+        return out
+    }
+
     private func buildReport(for day: Date) -> DayReport {
         let start = Calendar.current.startOfDay(for: day)
         let span = TimeSpan(start, Calendar.current.date(byAdding: .day, value: 1, to: start)!)
@@ -151,14 +165,23 @@ final class AppModel: ObservableObject {
     /// After "Privat/Pause" no new question until a clear project shows up again.
     private var quietSince: Date?
     private var answeredAway: Set<TimeSpan> = []
-    /// Entry created from an answer; it grows while you keep working without a different clear project.
-    private var runningEntryId: Int64?
+    /// Entry created from an answer or "Ich arbeite jetzt an …"; it grows while you keep working
+    /// without clearly switching to another project. Survives restarts.
+    @Published private(set) var runningEntry: TimeEntry?
+    private var runningEntryId: Int64? {
+        get { db.value("runningEntryId").flatMap(Int64.init) }
+        set { db.setValue(newValue.map(String.init), for: "runningEntryId") }
+    }
 
     private func checkContext() {
         guard !activeProjects.isEmpty else { return }
-        let today = isToday ? (report ?? buildReport(for: Date())) : buildReport(for: Date())
+        var today = isToday ? (report ?? buildReport(for: Date())) : buildReport(for: Date())
         let now = Date()
-        extendRunningEntry(today, now: now)
+        if extendRunningEntry(today, now: now) {
+            // Re-evaluate with the longer entry, otherwise the just-covered snippets would look "unclear".
+            if isToday { recompute() }
+            today = isToday ? (report ?? buildReport(for: Date())) : buildReport(for: Date())
+        }
         guard prompt == nil, now.timeIntervalSince(lastPromptAt) >= settings.promptCooldown || lastPromptAt == .distantPast else { return }
 
         if settings.askAfterAway {
@@ -190,7 +213,10 @@ final class AppModel: ObservableObject {
         switch p {
         case .unclear(let since, _):
             let entry = TimeEntry(projectId: id, span: TimeSpan(since, Date()), title: note)
-            runningEntryId = try? db.save(entry)
+            if let newId = try? db.save(entry) {
+                runningEntryId = newId
+                runningEntry = try? db.timeEntry(id: newId)
+            }
         case .away(let span, _):
             _ = try? db.save(TimeEntry(projectId: id, span: span, title: note.isEmpty ? "Abwesend" : note))
         }
@@ -213,22 +239,46 @@ final class AppModel: ObservableObject {
         PromptPanel.shared.hide()
     }
 
-    private func extendRunningEntry(_ today: DayReport, now: Date) {
-        guard let id = runningEntryId, var entry = today.entries.first(where: { $0.id == id }) else { return }
-        let after = today.segments.filter { $0.counts && $0.segment.span.end > entry.span.end }
-        // Stops as soon as something clearly belongs to another project, or after a long break.
-        let foreign = after.first { $0.source.isOwnSignal && $0.projectId != entry.projectId }
-        let limit = foreign?.segment.span.start ?? now
-        var end = entry.span.end
-        for s in after.sorted(by: { $0.segment.span.start < $1.segment.span.start }) where s.segment.span.start < limit {
-            if s.segment.span.start.timeIntervalSince(end) > settings.awayThreshold { break }
-            end = max(end, min(s.segment.span.end, limit))
+    /// Returns true if the entry changed.
+    @discardableResult
+    private func extendRunningEntry(_ today: DayReport, now: Date) -> Bool {
+        guard let id = runningEntryId, var entry = try? db.timeEntry(id: id) else {
+            runningEntry = nil
+            return false
         }
-        if end > entry.span.end {
-            entry.span.end = end
+        let r = RunningEntry.extend(entry, segments: today.segments, now: now,
+                                    foreignAfter: settings.unclearAfter, awayAfter: settings.awayThreshold)
+        var changed = false
+        if r.end > entry.span.end {
+            entry.span.end = r.end
             _ = try? db.save(entry)
+            changed = true
         }
-        if foreign != nil { runningEntryId = nil }
+        if !r.running { runningEntryId = nil }
+        runningEntry = r.running ? entry : nil
+        return changed
+    }
+
+    /// "Ich arbeite jetzt an …" from the menu bar.
+    func startWorking(on projectId: Int64) {
+        stopWorking()
+        let now = Date()
+        if let id = try? db.save(TimeEntry(projectId: projectId, span: TimeSpan(now, now.addingTimeInterval(1)))) {
+            runningEntryId = id
+            runningEntry = try? db.timeEntry(id: id)
+        }
+        quietSince = nil
+        recompute()
+    }
+
+    func stopWorking() {
+        if let id = runningEntryId, var e = try? db.timeEntry(id: id) {
+            e.span.end = max(e.span.end, Date())
+            _ = try? db.save(e)
+        }
+        runningEntryId = nil
+        runningEntry = nil
+        recompute()
     }
 
     // MARK: - Hooks
