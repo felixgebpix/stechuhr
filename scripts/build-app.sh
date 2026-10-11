@@ -48,7 +48,18 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 </plist>
 PLIST
 
-codesign --force --deep --sign - "$APP" >/dev/null
+# A stable signing identity keeps macOS permissions (Accessibility, Automation) across rebuilds.
+# Ad-hoc signatures change with every build, so macOS treats each build as a new app.
+# Create one once: Keychain Access → Certificate Assistant → Create a Certificate…
+#   Name "Stechuhr Local", Identity Type "Self-Signed Root", Certificate Type "Code Signing".
+IDENTITY="${STECHUHR_SIGN_IDENTITY:-Stechuhr Local}"
+if security find-identity -p codesigning | grep -q "\"$IDENTITY\""; then
+  codesign --force --deep --sign "$IDENTITY" "$APP" >/dev/null
+  echo "Signiert mit: $IDENTITY"
+else
+  codesign --force --deep --sign - "$APP" >/dev/null
+  echo "Ad-hoc signiert (macOS-Freigaben gehen bei jedem Neubau verloren, siehe Kommentar in build-app.sh)"
+fi
 echo "Gebaut: $APP"
 
 if [[ "${1:-}" == "--install" ]]; then
