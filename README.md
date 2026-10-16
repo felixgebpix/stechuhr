@@ -37,7 +37,7 @@ Projektseite ziehen legt ebenfalls Projekte mit Ordner-Zuordnung an.
 - **Woran arbeitest du gerade?** Erkennt Stechuhr ≥ 3 min lang kein Projekt, erscheint ein kleines Fenster unter der
   Menüleiste (stiehlt keinen Fokus). Die Antwort wird ein Zeiteintrag, der weiterläuft.
 - **Nach Abwesenheit** (≥ 15 min): Projekt und Notiz (z. B. „Besprechung“) für die Zeit.
-- **Timer per Klick**: Klick auf das Menüleisten-Icon zeigt alle Projekte (heute bearbeitete zuerst). Ein Klick startet
+- **Timer per Klick**: Hover oder Klick auf das Menüleisten-Icon zeigt alle Projekte (heute bearbeitete zuerst). Ein Klick startet
   den Timer, ein Klick auf ein anderes Projekt wechselt, ein Klick auf das laufende stoppt. Im Feld „+“ ein neues
   Projekt eintippen und Enter: angelegt und gestartet. Selbst gestartete Timer laufen, bis du wechselst, stoppst
   oder länger weg bist.

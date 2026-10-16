@@ -5,29 +5,24 @@ import StechuhrCore
 @main
 struct StechuhrApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var delegate
-    @StateObject private var model = AppModel()
 
     var body: some Scene {
-        // Menu bar app: the window opens only from the menu bar icon, not at launch.
-        Window("Stechuhr", id: "main") {
-            ContentView()
-                .environmentObject(model)
-                .frame(minWidth: 980, minHeight: 640)
-        }
-        .defaultLaunchBehavior(.suppressed)
-        MenuBarExtra {
-            MenuBarPanel().environmentObject(model)
-        } label: {
-            MenuBarLabel().environmentObject(model)
-        }
-        .menuBarExtraStyle(.window)
+        // Menu bar icon and main window are managed with AppKit (StatusItemController, MainWindow):
+        // SwiftUI's MenuBarExtra cannot open on hover.
+        Settings { EmptyView() }
     }
 }
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
+    private var statusItem: StatusItemController?
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         // No Dock icon – Stechuhr lives in the menu bar (also when started via swift run).
         NSApp.setActivationPolicy(.accessory)
+        MainActor.assumeIsolated {
+            let model = AppModel()
+            statusItem = StatusItemController(model: model)
+        }
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -75,20 +70,6 @@ struct ContentView: View {
     }
 }
 
-/// Menu bar icon; shows how many Claude Code sessions are working right now.
-struct MenuBarLabel: View {
-    @EnvironmentObject var model: AppModel
-
-    var body: some View {
-        let working = model.workingClaudeSessions.count
-        HStack(spacing: 2) {
-            Image(nsImage: MenuBarIcon.image)
-            if working > 0 { Text("\(working)") }
-        }
-        .help("Stechuhr")
-    }
-}
-
 enum MenuBarIcon {
     /// Template image (adapts to light/dark menu bar): clock with a time card underneath.
     static let image: NSImage = {
@@ -118,8 +99,8 @@ enum MenuBarIcon {
 /// Opens with one click on the menu bar icon: projects right away, one click starts or switches the timer.
 struct MenuBarPanel: View {
     @EnvironmentObject var model: AppModel
-    @Environment(\.openWindow) var openWindow
-    @Environment(\.dismiss) var dismiss
+    /// Closes the popover.
+    var dismiss: () -> Void = {}
     @State private var newName = ""
     @FocusState private var newFocused: Bool
 
@@ -248,7 +229,6 @@ struct MenuBarPanel: View {
     private func open(_ page: Page) {
         model.page = page
         dismiss()
-        openWindow(id: "main")
-        NSApp.activate(ignoringOtherApps: true)
+        MainWindow.shared.show(model: model)
     }
 }
