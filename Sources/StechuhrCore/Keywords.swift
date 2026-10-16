@@ -32,10 +32,12 @@ public struct KeywordMatcher: Sendable {
     }
 
     public func match(_ haystacks: [String]) -> Result {
-        let hay = haystacks.map(Self.normalize)
+        guard !terms.isEmpty else { return .none }
+        // One combined text; the newline separator is no word character, so words never span two fields.
+        let hay = Self.normalize(haystacks.filter { !$0.isEmpty }.joined(separator: "\n"))
         var hits: [Int64: String] = [:]
         for t in terms where hits[t.projectId] == nil {
-            if hay.contains(where: { Self.containsWord(t.normalized, in: $0) }) { hits[t.projectId] = t.text }
+            if Self.containsWord(t.normalized, in: hay) { hits[t.projectId] = t.text }
         }
         switch hits.count {
         case 0: return .none
@@ -58,8 +60,12 @@ public struct KeywordMatcher: Sendable {
         return path.hasPrefix(home) ? String(path.dropFirst(home.count)) : path
     }
 
+    private static let locale = Locale(identifier: "de_DE")
+
     static func normalize(_ s: String) -> String {
-        s.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: Locale(identifier: "de_DE"))
+        // Most titles are plain ASCII – lowercasing is much cheaper than full folding.
+        if s.utf8.allSatisfy({ $0 < 128 }) { return s.lowercased() }
+        return s.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: locale)
     }
 
     /// Case-/diacritic-insensitive search where the match is not part of a longer word.

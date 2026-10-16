@@ -75,6 +75,24 @@ final class AppModel: ObservableObject {
     /// The report for today, independent of the day shown in the window (for the menu bar).
     var todayReport: DayReport? { isToday ? report : nil }
 
+    /// Projects for the menu bar: the ones worked on today first, then alphabetically.
+    var menuProjects: [Project] {
+        let today = todayForeground
+        return activeProjects.sorted { a, b in
+            let ta = today[a.id] ?? 0, tb = today[b.id] ?? 0
+            if (ta > 0) != (tb > 0) { return ta > 0 }
+            if ta != tb { return ta > tb }
+            return a.name.localizedCaseInsensitiveCompare(b.name) == .orderedAscending
+        }
+    }
+
+    var todayForeground: [Int64: TimeInterval] {
+        guard let r = todayReport else { return [:] }
+        var out: [Int64: TimeInterval] = [:]
+        for s in r.stats { if let p = s.projectId { out[p] = s.foreground } }
+        return out
+    }
+
     var workingClaudeSessions: [EffectiveClaudeSpan] {
         guard isToday, let r = report else { return [] }
         var seen = Set<String>()
@@ -215,6 +233,7 @@ final class AppModel: ObservableObject {
             let entry = TimeEntry(projectId: id, span: TimeSpan(since, Date()), title: note)
             if let newId = try? db.save(entry) {
                 runningEntryId = newId
+                db.setValue("0", for: "runningEntryManual")
                 runningEntry = try? db.timeEntry(id: newId)
             }
         case .away(let span, _):
@@ -247,7 +266,8 @@ final class AppModel: ObservableObject {
             return false
         }
         let r = RunningEntry.extend(entry, segments: today.segments, now: now,
-                                    foreignAfter: settings.unclearAfter, awayAfter: settings.awayThreshold)
+                                    foreignAfter: settings.unclearAfter, awayAfter: settings.awayThreshold,
+                                    stopOnForeign: db.value("runningEntryManual") != "1")
         var changed = false
         if r.end > entry.span.end {
             entry.span.end = r.end
@@ -265,6 +285,8 @@ final class AppModel: ObservableObject {
         let now = Date()
         if let id = try? db.save(TimeEntry(projectId: projectId, span: TimeSpan(now, now.addingTimeInterval(1)))) {
             runningEntryId = id
+            // Started by you: keeps running until you switch, stop or are away – not on its own.
+            db.setValue("1", for: "runningEntryManual")
             runningEntry = try? db.timeEntry(id: id)
         }
         quietSince = nil

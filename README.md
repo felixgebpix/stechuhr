@@ -17,7 +17,8 @@ Reihenfolge pro Schnipsel, die erste passende Stufe gewinnt:
 2. **Regeln** (App, Titel, Domain, URL, Dateipfad; ist / enthält / beginnt mit / endet mit / Regex)
 3. **Ordner**: Dokumentpfad liegt in einem zugeordneten Ordner (z. B. `~/Kunden/DFA`)
 4. **Stichwörter**: Projektname + Stichwörter als ganze Wörter in Titel, URL, Pfad; mehrere Treffer → „mehrdeutig“
-5. **Claude-Code-Session**: Claude-App/Terminal zeigt eine Session → Projekt ihres Arbeitsordners
+5. **Claude-Code-Session**: Claude-App/Terminal → Projekt der Session. Bei mehreren offenen Sessions: gehören alle
+   zum selben Projekt (z. B. Worktrees eines Repos), gilt dieses; sonst die Session mit dem letzten Prompt
 6. **Umfeld**: Werkzeug-Apps (Claude, GitKraken, Terminal, Finder, …) ohne eigenen Hinweis übernehmen das Projekt
    der Arbeit davor/danach (bis 5 min)
 
@@ -36,7 +37,10 @@ Projektseite ziehen legt ebenfalls Projekte mit Ordner-Zuordnung an.
 - **Woran arbeitest du gerade?** Erkennt Stechuhr ≥ 3 min lang kein Projekt, erscheint ein kleines Fenster unter der
   Menüleiste (stiehlt keinen Fokus). Die Antwort wird ein Zeiteintrag, der weiterläuft.
 - **Nach Abwesenheit** (≥ 15 min): Projekt und Notiz (z. B. „Besprechung“) für die Zeit.
-- **Ich arbeite jetzt an …** im Menüleisten-Menü startet selbst einen laufenden Eintrag, „Stopp“ beendet ihn.
+- **Timer per Klick**: Klick auf das Menüleisten-Icon zeigt alle Projekte (heute bearbeitete zuerst). Ein Klick startet
+  den Timer, ein Klick auf ein anderes Projekt wechselt, ein Klick auf das laufende stoppt. Im Feld „+“ ein neues
+  Projekt eintippen und Enter: angelegt und gestartet. Selbst gestartete Timer laufen, bis du wechselst, stoppst
+  oder länger weg bist.
 - Laufende Einträge enden erst nach ≥ 3 min eindeutig anderer Projektarbeit oder einer längeren Pause;
   kurze Blicke in andere Projekte zählen nicht.
 
