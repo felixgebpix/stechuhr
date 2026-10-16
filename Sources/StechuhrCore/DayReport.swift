@@ -172,17 +172,25 @@ public enum BlockSuggester {
                                minLength: TimeInterval) -> [BlockSuggestion] {
         let covered = Spans.union(entries.map(\.span))
         let open = segments.filter { $0.counts && $0.source != .entry }
-        var candidates: [(span: TimeSpan, pid: Int64?, segs: [AttributedSegment])] = []
-        for (pid, segs) in Dictionary(grouping: open, by: \.projectId) {
-            for block in Spans.blocks(segs.map(\.segment.span), maxGap: gap) {
-                let inside = segs.filter { block.overlaps($0.segment.span) }
-                candidates.append((block, pid, inside))
-            }
-        }
         func active(_ segs: [AttributedSegment], in spans: [TimeSpan]) -> TimeInterval {
             Spans.total(Spans.intersect(segs.map(\.segment.span), spans))
         }
-        candidates.sort { active($0.segs, in: [$0.span]) > active($1.segs, in: [$1.span]) }
+        var candidates: [(span: TimeSpan, pid: Int64?, segs: [AttributedSegment], active: TimeInterval)] = []
+        for (pid, segs) in Dictionary(grouping: open, by: \.projectId) {
+            let sorted = segs.sorted { $0.segment.span.start < $1.segment.span.start }
+            var i = 0
+            for block in Spans.blocks(sorted.map(\.segment.span), maxGap: gap) {
+                // Blocks come in time order, so the snippets inside can be collected with one moving index.
+                var inside: [AttributedSegment] = []
+                while i < sorted.count && sorted[i].segment.span.start < block.end {
+                    inside.append(sorted[i])
+                    i += 1
+                }
+                guard block.duration >= minLength else { continue }
+                candidates.append((block, pid, inside, active(inside, in: [block])))
+            }
+        }
+        candidates.sort { $0.active > $1.active }
 
         var taken = covered
         var out: [BlockSuggestion] = []
@@ -288,16 +296,36 @@ public struct DayReport: Sendable {
             FolderResolution.resolve(run.cwd, folders: folders, keywords: keywords).projectId
         }
 
-        // Which Claude Code session does a terminal/Claude window show?
+        // Which Claude Code session does a terminal/Claude window show – if it can be told for sure?
         func shownRun(_ seg: Segment) -> ClaudeRun? {
             guard terminals.contains(seg.app.lowercased()) else { return nil }
             let open = runs.filter { $0.sessionSpan.overlaps(seg.span) }
             if let byTitle = open.first(where: { showsSession(seg.title, run: $0) }) { return byTitle }
+            // You submitted a prompt while this window was in front.
+            let typed = open.filter { r in
+                r.prompts.contains { $0 >= seg.span.start.addingTimeInterval(-2) && $0 <= seg.span.end.addingTimeInterval(5) }
+            }
+            if typed.count == 1 { return typed[0] }
             return open.count == 1 ? open[0] : nil
         }
 
+        // Project of a terminal/Claude window. Works with many parallel sessions (e.g. several worktrees of one repo).
+        func claudeProject(_ seg: Segment) -> Int64? {
+            guard terminals.contains(seg.app.lowercased()) else { return nil }
+            if let run = shownRun(seg), let p = runProject(run) { return p }
+            let open = runs.filter { $0.sessionSpan.overlaps(seg.span) }
+            let projects = Set(open.compactMap(runProject))
+            if projects.count == 1 { return projects.first }
+            // Otherwise: the session you prompted most recently (within 30 minutes).
+            let recent = open.compactMap { r -> (Date, ClaudeRun)? in
+                r.prompts.filter { $0 <= seg.span.end.addingTimeInterval(5) && $0 >= seg.span.start.addingTimeInterval(-1800) }
+                    .max().map { ($0, r) }
+            }
+            return recent.max { $0.0 < $1.0 }.flatMap { runProject($0.1) }
+        }
+
         let context = Attribution.Context(folders: folders, keywords: keywords,
-                                          claudeHint: { seg in shownRun(seg).flatMap(runProject) },
+                                          claudeHint: { seg in claudeProject(seg) },
                                           toolApps: Set(settings.toolApps), inheritWindow: settings.inheritWindow)
         let automatic = Attribution.attribute(segments, assignments: assignments, rules: rules, context: context)
         let dayEntries = entries.compactMap { e -> TimeEntry? in

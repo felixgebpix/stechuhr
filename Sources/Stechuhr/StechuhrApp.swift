@@ -16,10 +16,11 @@ struct StechuhrApp: App {
         }
         .defaultLaunchBehavior(.suppressed)
         MenuBarExtra {
-            MenuBarContent().environmentObject(model)
+            MenuBarPanel().environmentObject(model)
         } label: {
             MenuBarLabel().environmentObject(model)
         }
+        .menuBarExtraStyle(.window)
     }
 }
 
@@ -114,55 +115,139 @@ enum MenuBarIcon {
     }()
 }
 
-struct MenuBarContent: View {
+/// Opens with one click on the menu bar icon: projects right away, one click starts or switches the timer.
+struct MenuBarPanel: View {
     @EnvironmentObject var model: AppModel
     @Environment(\.openWindow) var openWindow
+    @Environment(\.dismiss) var dismiss
+    @State private var newName = ""
+    @FocusState private var newFocused: Bool
 
     var body: some View {
-        let running = model.workingClaudeSessions
-        if let today = model.todayReport {
-            Text("Heute: \(Fmt.duration(today.stats.reduce(0) { $0 + $1.foreground })) Vordergrund · \(Fmt.duration(today.billableWallClock)) abrechenbar")
-        }
-        Divider()
-        if let r = model.runningEntry {
-            Text("Jetzt: \(model.project(r.projectId)?.name ?? "–") seit \(Fmt.time(r.span.start))")
-            Button("Stopp") { model.stopWorking() }
-        }
-        Menu("Ich arbeite jetzt an …") {
-            ForEach(model.activeProjects) { p in
-                Button(p.name) { model.startWorking(on: p.id) }
-            }
-        }
-        .disabled(model.activeProjects.isEmpty)
-        Divider()
-        if running.isEmpty {
-            Text("Keine Claude-Code-Session arbeitet gerade")
-        } else {
-            Text("Claude Code arbeitet (\(running.count)):")
-            ForEach(running, id: \.sessionId) { c in
-                Text("\((c.cwd as NSString).lastPathComponent) – \(model.project(c.projectId)?.name ?? "nicht zugeordnet") – seit \(Fmt.time(c.span.start))")
-            }
-        }
-        if !model.suggestions.isEmpty {
+        VStack(alignment: .leading, spacing: 10) {
+            runningHeader
             Divider()
-            Button("\(model.suggestions.count) Regel-Vorschläge ansehen …") { open(.rules) }
+            if model.activeProjects.isEmpty {
+                Text("Noch keine Projekte – unten eines anlegen.").font(.callout).foregroundStyle(.secondary)
+            } else {
+                ScrollView {
+                    VStack(spacing: 2) {
+                        ForEach(model.menuProjects) { p in projectRow(p) }
+                    }
+                }
+                .frame(maxHeight: 340)
+                .fixedSize(horizontal: false, vertical: true)
+            }
+            HStack(spacing: 6) {
+                Image(systemName: "plus.circle.fill").foregroundStyle(Color.accentColor)
+                TextField("Neues Projekt – Enter startet den Timer", text: $newName)
+                    .textFieldStyle(.plain)
+                    .focused($newFocused)
+                    .onSubmit(createAndStart)
+            }
+            .padding(.horizontal, 8).padding(.vertical, 6)
+            .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 6))
+
+            Divider()
+            statusLines
+            Divider()
+            HStack {
+                footerButton("Heute", "calendar") { model.setDay(Date()); open(.day) }
+                footerButton("Auswertung", "chart.bar.doc.horizontal") { open(.range) }
+                footerButton("Einstellungen", "gearshape") { open(.settings) }
+                Spacer()
+                Button { NSApp.terminate(nil) } label: { Image(systemName: "power") }
+                    .buttonStyle(.borderless).help("Stechuhr beenden")
+            }
         }
-        Divider()
-        Button("Heute öffnen") {
-            model.setDay(Date())
-            open(.day)
+        .padding(12)
+        .frame(width: 320)
+    }
+
+    @ViewBuilder
+    private var runningHeader: some View {
+        if let r = model.runningEntry, let p = model.project(r.projectId) {
+            HStack(spacing: 8) {
+                Circle().fill(Color(hex: p.colorHex)).frame(width: 10, height: 10)
+                Text(p.name).font(.headline).lineLimit(1)
+                Spacer()
+                TimelineView(.periodic(from: .now, by: 1)) { _ in
+                    Text(elapsed(since: r.span.start)).font(.headline.monospacedDigit())
+                }
+                Button { model.stopWorking() } label: { Image(systemName: "stop.circle.fill").font(.title2) }
+                    .buttonStyle(.borderless).foregroundStyle(.red).help("Timer stoppen")
+            }
+        } else {
+            HStack {
+                Image(nsImage: MenuBarIcon.image).renderingMode(.template)
+                Text("Kein Timer läuft – Projekt anklicken").foregroundStyle(.secondary)
+            }
         }
-        .keyboardShortcut("o")
-        Button("Auswertung …") { open(.range) }
-        Button("Projekte …") { open(.projects) }
-        Button("Einstellungen …") { open(.settings) }
-            .keyboardShortcut(",")
-        Divider()
-        Button("Stechuhr beenden") { NSApp.terminate(nil) }.keyboardShortcut("q")
+    }
+
+    private func projectRow(_ p: Project) -> some View {
+        let running = model.runningEntry?.projectId == p.id
+        return Button {
+            if running { model.stopWorking() } else { model.startWorking(on: p.id) }
+            dismiss()
+        } label: {
+            HStack(spacing: 8) {
+                Circle().fill(Color(hex: p.colorHex)).frame(width: 10, height: 10)
+                Text(p.name).lineLimit(1)
+                Spacer()
+                if let t = model.todayForeground[p.id], t >= 60 {
+                    Text(Fmt.duration(t)).font(.caption).foregroundStyle(.secondary).monospacedDigit()
+                }
+                Image(systemName: running ? "stop.fill" : "play.fill")
+                    .font(.caption).foregroundStyle(running ? .red : .secondary)
+            }
+            .padding(.horizontal, 8).padding(.vertical, 6)
+            .contentShape(Rectangle())
+            .background(running ? Color(hex: p.colorHex).opacity(0.18) : .clear, in: RoundedRectangle(cornerRadius: 6))
+        }
+        .buttonStyle(.plain)
+        .help(running ? "Timer stoppen" : "Timer für \(p.name) starten")
+    }
+
+    @ViewBuilder
+    private var statusLines: some View {
+        let working = model.workingClaudeSessions
+        VStack(alignment: .leading, spacing: 3) {
+            if let today = model.todayReport {
+                Text("Heute \(Fmt.duration(today.stats.reduce(0) { $0 + $1.foreground })) · abrechenbar \(Fmt.duration(today.billableWallClock))")
+            }
+            if !working.isEmpty {
+                let names = Set(working.map { model.project($0.projectId)?.name ?? "nicht zugeordnet" }).sorted()
+                Text("Claude Code arbeitet: \(working.count) Session(s) · \(names.joined(separator: ", "))").lineLimit(2)
+            }
+            if !model.suggestions.isEmpty {
+                Button("\(model.suggestions.count) Regel-Vorschläge ansehen …") { open(.rules) }.buttonStyle(.link)
+            }
+        }
+        .font(.caption).foregroundStyle(.secondary)
+    }
+
+    private func footerButton(_ title: String, _ icon: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) { Label(title, systemImage: icon).font(.caption) }.buttonStyle(.borderless)
+    }
+
+    private func createAndStart() {
+        let name = newName.trimmingCharacters(in: .whitespaces)
+        guard !name.isEmpty else { return }
+        let existing = model.activeProjects.first { $0.name.caseInsensitiveCompare(name) == .orderedSame }
+        model.startWorking(on: existing?.id ?? model.newProject(named: name))
+        newName = ""
+        dismiss()
+    }
+
+    private func elapsed(since start: Date) -> String {
+        let s = max(0, Int(Date().timeIntervalSince(start)))
+        return String(format: "%d:%02d:%02d", s / 3600, s / 60 % 60, s % 60)
     }
 
     private func open(_ page: Page) {
         model.page = page
+        dismiss()
         openWindow(id: "main")
         NSApp.activate(ignoringOtherApps: true)
     }

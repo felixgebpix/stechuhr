@@ -465,3 +465,41 @@ final class RunningEntryTests: XCTestCase {
         XCTAssertFalse(r.running)
     }
 }
+
+final class ClaudeAppTests: XCTestCase {
+    let home = NSHomeDirectory()
+
+    func events(_ id: String, _ cwd: String, prompt: Double) -> [ClaudeEvent] {
+        [ClaudeEvent(sessionId: id, event: "SessionStart", ts: t(0), cwd: cwd),
+         ClaudeEvent(sessionId: id, event: "UserPromptSubmit", ts: t(prompt), cwd: cwd),
+         ClaudeEvent(sessionId: id, event: "Stop", ts: t(prompt + 5), cwd: cwd),
+         ClaudeEvent(sessionId: id, event: "SessionEnd", ts: t(60), cwd: cwd)]
+    }
+
+    func testManyWorktreesOfOneRepo() {
+        let ev = events("a", home + "/repos/app/.claude/worktrees/x-1", prompt: 1)
+            + events("b", home + "/repos/app/.claude/worktrees/y-2", prompt: 2)
+            + events("c", home + "/repos/app", prompt: 3)
+        let r = DayReport.build(day: day, segments: [seg("c", 10, 20, app: "Claude", title: "Claude")], assignments: [:], rules: [],
+                                projects: [Project(id: 1, name: "App", colorHex: "#000")], manualTasks: [], claudeEvents: ev,
+                                folders: [FolderMapping(path: home + "/repos/app", projectId: 1)], settings: AppSettings(), now: t(100))
+        XCTAssertEqual(r.segments[0].projectId, 1)
+    }
+
+    func testDifferentProjectsUseLastPrompt() {
+        let ev = events("a", home + "/repos/app", prompt: 5) + events("b", home + "/repos/web", prompt: 12)
+        let r = DayReport.build(day: day, segments: [seg("c", 10, 20, app: "Claude", title: "Claude")], assignments: [:], rules: [],
+                                projects: [Project(id: 1, name: "App", colorHex: "#000"), Project(id: 2, name: "Web", colorHex: "#111")],
+                                manualTasks: [], claudeEvents: ev,
+                                folders: [FolderMapping(path: home + "/repos/app", projectId: 1), FolderMapping(path: home + "/repos/web", projectId: 2)],
+                                settings: AppSettings(), now: t(100))
+        XCTAssertEqual(r.segments[0].projectId, 2)  // prompt typed at 12 while Claude was in front
+    }
+
+    func testManualTimerIgnoresForeignWork() {
+        let entry = TimeEntry(projectId: 1, span: span(0, 10))
+        let segs = [AttributedSegment(segment: seg("x", 10, 30), projectId: 2, source: .claudeSession)]
+        let r = RunningEntry.extend(entry, segments: segs, now: t(30), foreignAfter: 180, awayAfter: 900, stopOnForeign: false)
+        XCTAssertTrue(r.running)
+    }
+}

@@ -61,6 +61,8 @@ public struct ClaudeRun: Identifiable, Hashable, Sendable {
     /// From first to last event (or SessionEnd) – the session is "open" in this window.
     public var sessionSpan: TimeSpan
     public var work: [ClaudeWorkSpan]
+    /// When you submitted prompts in this session – tells which of several open sessions you were looking at.
+    public var prompts: [Date] = []
 
     public var id: String { sessionId }
     public var folderName: String { (cwd as NSString).lastPathComponent }
@@ -134,7 +136,8 @@ public enum ClaudeSessions {
             let sessionSpan = TimeSpan(first.ts, min(sessionEnd, day.end))
             guard !clippedWork.isEmpty || sessionSpan.overlaps(day) else { continue }
             runs.append(ClaudeRun(sessionId: sessionId, title: title, cwd: last.cwd,
-                                  sessionSpan: sessionSpan.clamped(to: day) ?? sessionSpan, work: clippedWork))
+                                  sessionSpan: sessionSpan.clamped(to: day) ?? sessionSpan, work: clippedWork,
+                                  prompts: evs.filter { $0.event == "UserPromptSubmit" && $0.agentId == nil }.map(\.ts)))
         }
         return runs.sorted { ($0.work.first?.span.start ?? $0.sessionSpan.start) < ($1.work.first?.span.start ?? $1.sessionSpan.start) }
     }

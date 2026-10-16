@@ -17,7 +17,6 @@ struct DayTimeline: View {
 
     static let laneHeight: CGFloat = 26
     static let laneGap: CGFloat = 6
-    static let labelWidth: CGFloat = 150
     static let axisHeight: CGFloat = 18
 
     var body: some View {
@@ -30,10 +29,10 @@ struct DayTimeline: View {
                     ForEach(layout.lanes) { lane in
                         HStack(spacing: 4) {
                             Image(systemName: lane.icon).foregroundStyle(.secondary).frame(width: 14)
-                            Text(lane.title).lineLimit(1).truncationMode(.middle)
+                            Text(lane.title).lineLimit(1).truncationMode(.middle).fixedSize(horizontal: false, vertical: true)
                         }
                         .font(.caption)
-                        .frame(width: Self.labelWidth - 8, height: Self.laneHeight, alignment: .leading)
+                        .frame(width: layout.labelWidth - 8, height: Self.laneHeight, alignment: .leading)
                         .help(lane.help)
                     }
                 }
@@ -229,15 +228,33 @@ struct TimelineLayout {
         for i in laneEnds.indices {
             lanes.append(TimelineLane(id: "manual\(i)", title: "Hintergrund", icon: "square.stack.3d.down.right", help: "Manuell markierte Hintergrundaufgaben"))
         }
+        // One lane per project (parallel sessions, e.g. several worktrees, share it) instead of one per session.
+        var sessionProject: [String: Int64] = [:]
+        for c in report.claudeSpans { if let p = c.projectId { sessionProject[c.sessionId] = p } }
         var sessionLane: [String: Int] = [:]
-        for run in report.runs where !run.work.isEmpty {
-            sessionLane[run.sessionId] = lanes.count
-            lanes.append(TimelineLane(id: "cc-\(run.sessionId)", title: "Claude · \(run.title ?? run.folderName)",
-                                      icon: "sparkles", help: "\(run.cwd)\nSession \(run.sessionId)"))
+        var groupLane: [Int64: Int] = [:]
+        let working = report.runs.filter { !$0.work.isEmpty }
+        let groups = Dictionary(grouping: working) { sessionProject[$0.sessionId] ?? -1 }
+        for (pid, runs) in groups.sorted(by: { ($0.value.first?.work.first?.span.start ?? .distantFuture) < ($1.value.first?.work.first?.span.start ?? .distantFuture) }) {
+            if groupLane[pid] == nil {
+                groupLane[pid] = lanes.count
+                let name = pid == -1 ? "nicht zugeordnet" : (projectName(pid) ?? "–")
+                lanes.append(TimelineLane(id: "cc-\(pid)", title: "Claude · \(name)\(runs.count > 1 ? " (\(runs.count))" : "")",
+                                          icon: "sparkles",
+                                          help: runs.map { "\($0.title ?? $0.folderName) – \($0.cwd)" }.joined(separator: "\n")))
+            }
+            for r in runs { sessionLane[r.sessionId] = groupLane[pid] }
         }
         self.manualLane = manualLane.mapValues { $0 + 2 }
         self.sessionLane = sessionLane
         self.lanes = lanes
+    }
+
+    /// Wide enough for the longest lane title (within limits).
+    var labelWidth: CGFloat {
+        let font = NSFont.preferredFont(forTextStyle: .caption1)
+        let widest = lanes.map { ($0.title as NSString).size(withAttributes: [.font: font]).width }.max() ?? 0
+        return min(max(widest + 40, 150), 360)
     }
 
     var height: CGFloat {

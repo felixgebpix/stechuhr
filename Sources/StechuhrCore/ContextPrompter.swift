@@ -80,8 +80,10 @@ public enum RunningEntry {
     /// New end of the entry and whether it keeps running.
     /// It stops after `foreignAfter` of work that clearly belongs to another project (short glances don't count),
     /// or after a break longer than `awayAfter`.
+    /// `stopOnForeign: false` for timers you started yourself: they only end when you switch, stop or are away.
     public static func extend(_ entry: TimeEntry, segments: [AttributedSegment], now: Date,
-                              foreignAfter: TimeInterval, awayAfter: TimeInterval) -> (end: Date, running: Bool) {
+                              foreignAfter: TimeInterval, awayAfter: TimeInterval,
+                              stopOnForeign: Bool = true) -> (end: Date, running: Bool) {
         let after = segments.filter { $0.counts && $0.segment.span.end > entry.span.end }
             .sorted { $0.segment.span.start < $1.segment.span.start }
         var end = entry.span.end
@@ -90,7 +92,7 @@ public enum RunningEntry {
         for s in after {
             if s.segment.span.start.timeIntervalSince(lastActivity) > awayAfter { return (end, false) }
             lastActivity = max(lastActivity, s.segment.span.end)
-            if s.source.isOwnSignal, s.projectId != entry.projectId {
+            if stopOnForeign, s.source.isOwnSignal, s.projectId != entry.projectId {
                 foreignTime += s.segment.duration
                 if foreignTime >= foreignAfter { return (end, false) }
             } else {
