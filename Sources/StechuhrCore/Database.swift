@@ -6,6 +6,8 @@ public enum StechuhrPaths {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         let dir = base.appendingPathComponent("Stechuhr", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        // Activity data is personal: only the user may enter this folder.
+        try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: dir.path)
         return dir
     }
     public static var database: URL { supportDir.appendingPathComponent("stechuhr.sqlite") }
