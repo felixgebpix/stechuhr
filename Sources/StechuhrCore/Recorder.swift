@@ -193,6 +193,8 @@ public final class ActivityRecorder: @unchecked Sendable {
     /// Cached address bar of the current Firefox-family window (searching the tree every 2 s would be too expensive).
     private var urlField: (window: AXUIElement, field: AXUIElement)?
     private var wroteDiagnostics = false
+    /// Failed lookups per browser process; drives the escalation below.
+    private var misses: [pid_t: Int] = [:]
 
     /// URL of the focused tab in a Firefox-based browser, via accessibility:
     /// 1. AXURL of the web area, 2. value of the address bar. If neither works, a one-time diagnostic dump is written.
@@ -204,6 +206,15 @@ public final class ActivityRecorder: @unchecked Sendable {
         guard AXUIElementCopyAttributeValue(app, kAXFocusedWindowAttribute as CFString, &windowRef) == .success,
               let windowRef else { return nil }
         let window = windowRef as! AXUIElement
+
+        // Firefox builds its accessibility tree only when an assistive app asks for it.
+        // AXManualAccessibility is the lightweight switch; AXEnhancedUserInterface (what VoiceOver uses) only if needed.
+        let miss = misses[pid, default: 0]
+        if miss == 0 {
+            AXUIElementSetAttributeValue(app, "AXManualAccessibility" as CFString, kCFBooleanTrue)
+        } else if miss == 3 {
+            AXUIElementSetAttributeValue(app, "AXEnhancedUserInterface" as CFString, kCFBooleanTrue)
+        }
 
         if let cached = urlField, CFEqual(cached.window, window), let url = Self.addressBarURL(cached.field) {
             return url
@@ -223,13 +234,14 @@ public final class ActivityRecorder: @unchecked Sendable {
             if role == "AXWebArea" {
                 var url: CFTypeRef?
                 if AXUIElementCopyAttributeValue(el, kAXURLAttribute as CFString, &url) == .success {
-                    if let u = url as? URL { return u.absoluteString }
-                    if let s = url as? String, !s.isEmpty { return s }
+                    if let u = url as? URL { misses[pid] = 0; return u.absoluteString }
+                    if let s = url as? String, !s.isEmpty { misses[pid] = 0; return s }
                 }
                 continue  // never descend into page content
             }
             if role == "AXTextField" || role == "AXComboBox", Self.looksLikeAddressBar(el), let url = Self.addressBarURL(el) {
                 urlField = (window, el)
+                misses[pid] = 0
                 return url
             }
             var children: CFTypeRef?
@@ -238,7 +250,9 @@ public final class ActivityRecorder: @unchecked Sendable {
                 queue.append(contentsOf: list.map { ($0, depth + 1) })
             }
         }
-        if !wroteDiagnostics {
+        misses[pid] = miss + 1
+        // Diagnose only after both switches had a few seconds to take effect.
+        if !wroteDiagnostics && miss >= 6 {
             wroteDiagnostics = true
             let text = "Stechuhr – Diagnose Firefox-Browser, \(Date())\nKeine URL gefunden (\(visited) Elemente durchsucht).\n\n" + dump.joined(separator: "\n")
             try? text.write(to: StechuhrPaths.supportDir.appendingPathComponent("firefox-diagnose.txt"), atomically: true, encoding: .utf8)
