@@ -71,8 +71,10 @@ Daten liegen in `~/Library/Application Support/Stechuhr/` (`stechuhr.sqlite`).
 
 ### Berechtigungen
 - **Bedienungshilfen** (Systemeinstellungen → Datenschutz & Sicherheit): nötig für Fenstertitel. Ohne sie erfasst Stechuhr nur App-Namen.
-- **Automation** pro Browser (fragt macOS beim ersten Mal): für URL und Titel des aktiven Tabs in Safari, Chrome, Arc, Brave, Edge, Vivaldi und Opera. Private Fenster werden ohne Titel und URL erfasst. Firefox liefert nur den Fenstertitel.
-- Die App ist ad-hoc signiert. Nach einem Neubau mit `build-app.sh` kann macOS die Freigaben deshalb wieder verlangen.
+- **Automation** pro Browser (fragt macOS beim ersten Mal): für URL und Titel des aktiven Tabs in Safari, Chrome, Arc, Brave, Edge, Vivaldi und Opera. Private Fenster werden ohne Titel und URL erfasst. Firefox-basierte Browser (Firefox, Waterfox, Zen, LibreWolf) liefern die URL über die Bedienungshilfen.
+- **Signatur**: Ohne eigenes Zertifikat signiert `build-app.sh` ad hoc; dann verlangt macOS die Freigaben nach jedem
+  Neubau erneut. Einmalig ein Zertifikat anlegen (Schlüsselbundverwaltung → Zertifikatsassistent → Zertifikat erstellen,
+  Name „Stechuhr Local“, Typ „Codesignatur“, selbstsigniert) – danach bleiben die Freigaben bei Updates erhalten.
 
 ## Claude-Code-Erfassung
 
