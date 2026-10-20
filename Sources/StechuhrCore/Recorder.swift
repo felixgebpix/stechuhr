@@ -149,7 +149,7 @@ public final class ActivityRecorder: @unchecked Sendable {
             obs.title = "Privates Fenster"
         case .none:
             // Firefox-based browsers have no AppleScript, but expose the page URL via accessibility.
-            if Self.firefox.contains(bundle), let url = Self.firefoxURL(pid: app.processIdentifier) {
+            if Self.firefox.contains(bundle), let url = firefoxURL(pid: app.processIdentifier) {
                 obs.url = url
                 obs.pageTitle = BrowserTitle.parse(obs.title).page
             }
@@ -190,35 +190,99 @@ public final class ActivityRecorder: @unchecked Sendable {
         "app.zen-browser.zen", "io.gitlab.librewolf-community", "one.ablaze.floorp",
     ]
 
-    /// Finds the web area of the focused window (breadth-first, bounded) and reads its AXURL.
-    static func firefoxURL(pid: pid_t) -> String? {
+    /// Cached address bar of the current Firefox-family window (searching the tree every 2 s would be too expensive).
+    private var urlField: (window: AXUIElement, field: AXUIElement)?
+    private var wroteDiagnostics = false
+
+    /// URL of the focused tab in a Firefox-based browser, via accessibility:
+    /// 1. AXURL of the web area, 2. value of the address bar. If neither works, a one-time diagnostic dump is written.
+    func firefoxURL(pid: pid_t) -> String? {
         guard AXIsProcessTrusted() else { return nil }
         let app = AXUIElementCreateApplication(pid)
         AXUIElementSetMessagingTimeout(app, 0.25)
-        var window: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(app, kAXFocusedWindowAttribute as CFString, &window) == .success, let window else { return nil }
-        var queue: [AXUIElement] = [window as! AXUIElement]
+        var windowRef: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(app, kAXFocusedWindowAttribute as CFString, &windowRef) == .success,
+              let windowRef else { return nil }
+        let window = windowRef as! AXUIElement
+
+        if let cached = urlField, CFEqual(cached.window, window), let url = Self.addressBarURL(cached.field) {
+            return url
+        }
+        urlField = nil
+
+        var queue: [(AXUIElement, Int)] = [(window, 0)]
         var visited = 0
-        while !queue.isEmpty && visited < 400 {
-            let el = queue.removeFirst()
+        var dump: [String] = []
+        while !queue.isEmpty && visited < 1500 {
+            let (el, depth) = queue.removeFirst()
             visited += 1
-            var role: CFTypeRef?
-            AXUIElementCopyAttributeValue(el, kAXRoleAttribute as CFString, &role)
-            if (role as? String) == "AXWebArea" {
+            let role = Self.string(el, kAXRoleAttribute)
+            if !wroteDiagnostics && dump.count < 600 {
+                dump.append(String(repeating: "  ", count: depth) + Self.describe(el, role: role))
+            }
+            if role == "AXWebArea" {
                 var url: CFTypeRef?
                 if AXUIElementCopyAttributeValue(el, kAXURLAttribute as CFString, &url) == .success {
                     if let u = url as? URL { return u.absoluteString }
-                    if let s = url as? String { return s }
+                    if let s = url as? String, !s.isEmpty { return s }
                 }
-                continue  // don't descend into page content
+                continue  // never descend into page content
+            }
+            if role == "AXTextField" || role == "AXComboBox", Self.looksLikeAddressBar(el), let url = Self.addressBarURL(el) {
+                urlField = (window, el)
+                return url
             }
             var children: CFTypeRef?
-            if AXUIElementCopyAttributeValue(el, kAXChildrenAttribute as CFString, &children) == .success,
+            if depth < 14, AXUIElementCopyAttributeValue(el, kAXChildrenAttribute as CFString, &children) == .success,
                let list = children as? [AXUIElement] {
-                queue.append(contentsOf: list)
+                queue.append(contentsOf: list.map { ($0, depth + 1) })
             }
         }
+        if !wroteDiagnostics {
+            wroteDiagnostics = true
+            let text = "Stechuhr – Diagnose Firefox-Browser, \(Date())\nKeine URL gefunden (\(visited) Elemente durchsucht).\n\n" + dump.joined(separator: "\n")
+            try? text.write(to: StechuhrPaths.supportDir.appendingPathComponent("firefox-diagnose.txt"), atomically: true, encoding: .utf8)
+        }
         return nil
+    }
+
+    static func string(_ el: AXUIElement, _ attribute: String) -> String? {
+        var v: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(el, attribute as CFString, &v) == .success else { return nil }
+        return v as? String
+    }
+
+    static func looksLikeAddressBar(_ el: AXUIElement) -> Bool {
+        let id = (string(el, "AXIdentifier") ?? "").lowercased()
+        if id.contains("urlbar") || id.contains("address") { return true }
+        let desc = [string(el, kAXDescriptionAttribute), string(el, kAXTitleAttribute), string(el, kAXPlaceholderValueAttribute)]
+            .compactMap { $0?.lowercased() }.joined(separator: " ")
+        return ["adresse", "address", "suchbegriff", "search or enter", "url"].contains { desc.contains($0) }
+    }
+
+    /// The address bar shows "example.com/path" or a full URL; search terms are ignored.
+    static func addressBarURL(_ el: AXUIElement) -> String? {
+        guard let raw = string(el, kAXValueAttribute)?.trimmingCharacters(in: .whitespaces), !raw.isEmpty,
+              !raw.contains(" ") else { return nil }
+        if raw.contains("://") || raw.hasPrefix("about:") { return raw }
+        guard raw.contains("."), let host = raw.split(separator: "/").first, host.contains(".") else { return nil }
+        return "https://" + raw
+    }
+
+    /// One line of the diagnostic dump: role, subrole, identifier, description and shortened title/value.
+    static func describe(_ el: AXUIElement, role: String?) -> String {
+        func short(_ s: String?) -> String { s.map { $0.count > 60 ? String($0.prefix(60)) + "…" : $0 } ?? "" }
+        var parts = [role ?? "?"]
+        if let sub = string(el, kAXSubroleAttribute) { parts.append("sub=\(sub)") }
+        if let id = string(el, "AXIdentifier"), !id.isEmpty { parts.append("id=\(id)") }
+        if let d = string(el, kAXDescriptionAttribute), !d.isEmpty { parts.append("desc=\(short(d))") }
+        if let t = string(el, kAXTitleAttribute), !t.isEmpty { parts.append("title=\(short(t))") }
+        if let v = string(el, kAXValueAttribute), !v.isEmpty { parts.append("value=\(short(v))") }
+        var names: CFArray?
+        if role == "AXWebArea", AXUIElementCopyAttributeNames(el, &names) == .success, let n = names as? [String] {
+            parts.append("attrs=\(n.joined(separator: ","))")
+        }
+        return parts.joined(separator: " | ")
     }
 
     static let safari: [String: String] = [
