@@ -102,6 +102,7 @@ struct MenuBarPanel: View {
     /// Closes the popover.
     var dismiss: () -> Void = {}
     @State private var newName = ""
+    @State private var copied = false
     @FocusState private var newFocused: Bool
 
     var body: some View {
@@ -204,6 +205,13 @@ struct MenuBarPanel: View {
             if !model.suggestions.isEmpty {
                 Button("\(model.suggestions.count) Regel-Vorschläge ansehen …") { open(.rules) }.buttonStyle(.link)
             }
+            Button(copied ? "Kopiert ✓" : "Heute für KI kopieren") {
+                model.copyAIExport(for: Date())
+                copied = true
+                DispatchQueue.main.asyncAfter(deadline: .now() + 2) { copied = false }
+            }
+            .buttonStyle(.link)
+            .help("Den heutigen Tag als Markdown in die Zwischenablage – zum Einfügen in ChatGPT, Claude & Co.")
         }
         .font(.caption).foregroundStyle(.secondary)
     }

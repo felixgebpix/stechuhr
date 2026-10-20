@@ -503,3 +503,31 @@ final class ClaudeAppTests: XCTestCase {
         XCTAssertTrue(r.running)
     }
 }
+
+final class AIExportTests: XCTestCase {
+    func testMarkdownContainsBrowserAndTimelineWithoutQueryStrings() {
+        let web = Segment(key: "w", span: span(0, 20), app: "Google Chrome", title: "x",
+                          url: "https://docs.google.com/document/d/abc/edit?token=SECRET#h", domain: "docs.google.com", pageTitle: "Angebot Acme")
+        let segs = [web, seg("m", 20, 22, app: "Mail", title: "Inbox"), seg("m2", 22.5, 25, app: "Mail", title: "Inbox")]
+        let r = DayReport.build(day: day, segments: segs, assignments: ["w": 1], rules: [], projects: [Project(id: 1, name: "Acme", colorHex: "#000")],
+                                manualTasks: [], claudeEvents: [], folders: [], settings: AppSettings(), now: t(100))
+        let md = AIExport.markdown(r) { $0 == 1 ? "Acme" : "nicht zugeordnet" }
+        XCTAssertTrue(md.contains("### docs.google.com"), md)
+        XCTAssertTrue(md.contains("Angebot Acme"))
+        XCTAssertTrue(md.contains("<https://docs.google.com/document/d/abc/edit>"))
+        XCTAssertFalse(md.contains("SECRET"))
+        // The two Mail snippets 30 s apart are one line in the timeline.
+        XCTAssertEqual(md.components(separatedBy: "Mail · Inbox →").count - 1, 1)
+    }
+}
+
+final class BrowserTitleTests: XCTestCase {
+    func testParse() {
+        XCTAssertEqual(BrowserTitle.parse("Ein Video - Videoportal — Arbeit", app: "Waterfox"),
+                       .init(page: "Ein Video - Videoportal", site: "Videoportal", profile: "Arbeit"))
+        XCTAssertEqual(BrowserTitle.parse("(13) Feed | Netzwerk — Arbeit").site, "Netzwerk")
+        XCTAssertEqual(BrowserTitle.parse("Termine - Verein - news.example.org — Privat").site, "news.example.org")
+        XCTAssertEqual(BrowserTitle.parse("Planer • Kalender — Arbeit").site, "Planer")
+        XCTAssertEqual(BrowserTitle.parse("Privat — Waterfox", app: "Waterfox"), .init(page: "", site: nil, profile: "Privat"))
+    }
+}

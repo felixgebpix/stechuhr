@@ -148,7 +148,11 @@ public final class ActivityRecorder: @unchecked Sendable {
         case .privateWindow:
             obs.title = "Privates Fenster"
         case .none:
-            break
+            // Firefox-based browsers have no AppleScript, but expose the page URL via accessibility.
+            if Self.firefox.contains(bundle), let url = Self.firefoxURL(pid: app.processIdentifier) {
+                obs.url = url
+                obs.pageTitle = BrowserTitle.parse(obs.title).page
+            }
         }
         return obs
     }
@@ -181,6 +185,42 @@ public final class ActivityRecorder: @unchecked Sendable {
         "org.chromium.Chromium": "Chromium", "com.operasoftware.Opera": "Opera",
         "company.thebrowser.dia": "Dia",
     ]
+    static let firefox: Set<String> = [
+        "org.mozilla.firefox", "org.mozilla.firefoxdeveloperedition", "org.mozilla.nightly", "net.waterfox.waterfox",
+        "app.zen-browser.zen", "io.gitlab.librewolf-community", "one.ablaze.floorp",
+    ]
+
+    /// Finds the web area of the focused window (breadth-first, bounded) and reads its AXURL.
+    static func firefoxURL(pid: pid_t) -> String? {
+        guard AXIsProcessTrusted() else { return nil }
+        let app = AXUIElementCreateApplication(pid)
+        AXUIElementSetMessagingTimeout(app, 0.25)
+        var window: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(app, kAXFocusedWindowAttribute as CFString, &window) == .success, let window else { return nil }
+        var queue: [AXUIElement] = [window as! AXUIElement]
+        var visited = 0
+        while !queue.isEmpty && visited < 400 {
+            let el = queue.removeFirst()
+            visited += 1
+            var role: CFTypeRef?
+            AXUIElementCopyAttributeValue(el, kAXRoleAttribute as CFString, &role)
+            if (role as? String) == "AXWebArea" {
+                var url: CFTypeRef?
+                if AXUIElementCopyAttributeValue(el, kAXURLAttribute as CFString, &url) == .success {
+                    if let u = url as? URL { return u.absoluteString }
+                    if let s = url as? String { return s }
+                }
+                continue  // don't descend into page content
+            }
+            var children: CFTypeRef?
+            if AXUIElementCopyAttributeValue(el, kAXChildrenAttribute as CFString, &children) == .success,
+               let list = children as? [AXUIElement] {
+                queue.append(contentsOf: list)
+            }
+        }
+        return nil
+    }
+
     static let safari: [String: String] = [
         "com.apple.Safari": "Safari", "com.apple.SafariTechnologyPreview": "Safari Technology Preview",
     ]

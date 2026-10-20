@@ -88,6 +88,14 @@ struct DayView: View {
                 }
                 .help("Alle gestrichelten Blöcke mit erkanntem Projekt als Zeiteinträge bestätigen")
             }
+            Menu {
+                Button("In Zwischenablage kopieren") { model.copyAIExport(for: model.day) }
+                Button("Als Datei sichern …") { model.saveAIExport(for: model.day) }
+            } label: {
+                Label("Für KI exportieren", systemImage: "sparkles.rectangle.stack")
+            }
+            .fixedSize()
+            .help("Den ganzen Tag als Text (Markdown) für ChatGPT, Claude & Co.: Projekte, Browser nach Domain und Seite, Apps, Claude-Code-Sessions und chronologischer Verlauf. URLs ohne Query-Parameter.")
             Toggle("Nach Projekt einfärben", isOn: $model.colorByProject).toggleStyle(.switch).controlSize(.small)
             Button {
                 let start = model.isToday ? Date().addingTimeInterval(-3600) : model.day.addingTimeInterval(10 * 3600)

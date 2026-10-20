@@ -1,5 +1,7 @@
 import Foundation
 import SwiftUI
+import AppKit
+import UniformTypeIdentifiers
 import StechuhrCore
 
 @MainActor
@@ -145,6 +147,28 @@ final class AppModel: ObservableObject {
         let f = DateFormatter()
         f.dateFormat = "yyyy-MM-dd"
         return f.string(from: day)
+    }
+
+    // MARK: - Export for AI
+
+    func aiMarkdown(for day: Date) -> String {
+        AIExport.markdown(buildReport(for: day)) { id in id == nil ? "nicht zugeordnet" : (self.project(id)?.name ?? "–") }
+    }
+
+    func copyAIExport(for day: Date) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(aiMarkdown(for: day), forType: .string)
+    }
+
+    func saveAIExport(for day: Date) {
+        let f = DateFormatter()
+        f.dateFormat = "yyyy-MM-dd"
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [.init(filenameExtension: "md") ?? .plainText]
+        panel.nameFieldStringValue = "Stechuhr \(f.string(from: day)).md"
+        NSApp.activate(ignoringOtherApps: true)
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        try? aiMarkdown(for: day).write(to: url, atomically: true, encoding: .utf8)
     }
 
     /// Reports for every day in [from, to], built step by step so the UI stays responsive.

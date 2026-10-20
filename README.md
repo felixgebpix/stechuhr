@@ -51,6 +51,14 @@ Semikolon, Dezimalkomma, Stunden dezimal):
 - **Projekte pro Tag**: Vordergrund, bestätigt, Hintergrund, Claude Code, Überlappung, abrechenbar, Blöcke
 - **Zeiteinträge und Hintergrundaufgaben**: Datum, Von, Bis, Dauer, Projekt, Titel/Notiz
 
+## Export für KI
+
+„Für KI exportieren“ (Tagesansicht) bzw. „Heute für KI kopieren“ (Menüleiste) erzeugt den ganzen Tag als Markdown:
+Übersicht pro Projekt, Zeiteinträge, Claude-Code-Sessions, Browser nach Website und Seite (mit Profil), Apps nach
+Fenster/Dokument und einen chronologischen Verlauf. URLs ohne Query-Parameter und Fragmente. Bei Firefox-basierten
+Browsern (Firefox, Waterfox, Zen, LibreWolf) liest Stechuhr die URL über die Bedienungshilfen; sonst wird die
+Website aus dem Fenstertitel geschätzt.
+
 ## Bauen und starten
 
 ```bash
